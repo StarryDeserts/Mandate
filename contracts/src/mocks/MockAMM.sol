@@ -12,6 +12,8 @@ contract MockAMM {
     error InsufficientOutput(uint256 amountOut, uint256 minAmountOut);
     error InsufficientLiquidity(address assetOut, uint256 available, uint256 required);
     error NotRateAdmin(address caller);
+    error ZeroRate(address assetIn, address assetOut);
+    error RateNotSet(address assetIn, address assetOut);
 
     address public immutable admin;
 
@@ -25,12 +27,20 @@ contract MockAMM {
         if (msg.sender != admin) {
             revert NotRateAdmin(msg.sender);
         }
+        if (rate1e18 == 0) {
+            revert ZeroRate(assetIn, assetOut);
+        }
 
         rates[assetIn][assetOut] = rate1e18;
     }
 
     function quote(address assetIn, uint256 amountIn, address assetOut) public view returns (uint256 amountOut) {
-        amountOut = amountIn * rates[assetIn][assetOut] / RATE_SCALE;
+        uint256 rate1e18 = rates[assetIn][assetOut];
+        if (rate1e18 == 0) {
+            revert RateNotSet(assetIn, assetOut);
+        }
+
+        amountOut = amountIn * rate1e18 / RATE_SCALE;
     }
 
     function swap(address assetIn, uint256 amountIn, address assetOut, uint256 minAmountOut, address to)

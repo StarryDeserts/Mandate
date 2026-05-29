@@ -40,6 +40,28 @@ contract MockAMMTest is Test {
         amm.setRate(address(tokenOut), address(tokenIn), RATE_1E18);
     }
 
+    function test_setRateRevertsWhenRateIsZero() public {
+        vm.expectRevert(abi.encodeWithSelector(MockAMM.ZeroRate.selector, address(tokenIn), address(tokenOut)));
+        amm.setRate(address(tokenIn), address(tokenOut), 0);
+    }
+
+    function test_quoteRevertsWhenPairRateIsUnset() public {
+        vm.expectRevert(abi.encodeWithSelector(MockAMM.RateNotSet.selector, address(tokenOut), address(tokenIn)));
+        amm.quote(address(tokenOut), AMOUNT_IN, address(tokenIn));
+    }
+
+    function test_swapRevertsWhenPairRateIsUnsetAndDoesNotMoveInputBalances() public {
+        uint256 traderInputBefore = tokenOut.balanceOf(TRADER);
+        uint256 ammInputBefore = tokenOut.balanceOf(address(amm));
+
+        vm.expectRevert(abi.encodeWithSelector(MockAMM.RateNotSet.selector, address(tokenOut), address(tokenIn)));
+        vm.prank(TRADER);
+        amm.swap(address(tokenOut), AMOUNT_IN, address(tokenIn), 0, RECIPIENT);
+
+        assertEq(tokenOut.balanceOf(TRADER), traderInputBefore);
+        assertEq(tokenOut.balanceOf(address(amm)), ammInputBefore);
+    }
+
     function test_swapAtFixedRateReturnsExpectedOutAndMovesBalances() public {
         vm.prank(TRADER);
         uint256 amountOut = amm.swap(address(tokenIn), AMOUNT_IN, address(tokenOut), EXPECTED_AMOUNT_OUT, RECIPIENT);
