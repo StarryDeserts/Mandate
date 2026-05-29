@@ -34,6 +34,12 @@ contract MockAMMTest is Test {
         assertEq(amm.quote(address(tokenIn), AMOUNT_IN, address(tokenOut)), EXPECTED_AMOUNT_OUT);
     }
 
+    function test_setRateRevertsWhenCallerIsNotAdmin() public {
+        vm.expectRevert(abi.encodeWithSelector(MockAMM.NotRateAdmin.selector, TRADER));
+        vm.prank(TRADER);
+        amm.setRate(address(tokenOut), address(tokenIn), RATE_1E18);
+    }
+
     function test_swapAtFixedRateReturnsExpectedOutAndMovesBalances() public {
         vm.prank(TRADER);
         uint256 amountOut = amm.swap(address(tokenIn), AMOUNT_IN, address(tokenOut), EXPECTED_AMOUNT_OUT, RECIPIENT);

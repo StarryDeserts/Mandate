@@ -11,10 +11,21 @@ contract MockAMM {
 
     error InsufficientOutput(uint256 amountOut, uint256 minAmountOut);
     error InsufficientLiquidity(address assetOut, uint256 available, uint256 required);
+    error NotRateAdmin(address caller);
+
+    address public immutable admin;
 
     mapping(address assetIn => mapping(address assetOut => uint256 rate1e18)) public rates;
 
+    constructor() {
+        admin = msg.sender;
+    }
+
     function setRate(address assetIn, address assetOut, uint256 rate1e18) external {
+        if (msg.sender != admin) {
+            revert NotRateAdmin(msg.sender);
+        }
+
         rates[assetIn][assetOut] = rate1e18;
     }
 
