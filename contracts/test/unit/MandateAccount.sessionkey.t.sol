@@ -15,12 +15,13 @@ contract MandateAccountSessionKeyTest is Test {
     address private constant OWNER = address(0xA11CE);
     address private constant SESSION = address(0x5E5510);
     address private constant STRANGER = address(0xB0B);
+    address private constant USDG = address(0xA55E7);
 
     MandateAccount private account;
 
     function setUp() public {
         vm.warp(1_000);
-        account = new MandateAccount(OWNER);
+        account = new MandateAccount(OWNER, USDG);
     }
 
     function test_addSessionKeyRejectsNonDefaultReservedScopeFields() public {

@@ -67,7 +67,15 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         SessionKey sessionKey;
     }
 
+    struct ValuationRows {
+        address[] assets;
+        uint256[] balances;
+        uint256[] pricesUSDG1e18;
+        uint64 priceTimestamp;
+    }
+
     address public owner;
+    address public immutable usdg;
     mapping(address => SessionKey) public sessionKeys;
     MandateConfig public mandate;
     mapping(address => bool) public isAssetAllowed;
@@ -81,8 +89,9 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
     uint64 public turnoverDay;
     uint64 public lastTradeTimestamp;
 
-    constructor(address owner_) {
+    constructor(address owner_, address usdg_) {
         owner = owner_;
+        usdg = usdg_;
         permissionEngine = new EquityPermissionEngine();
     }
 
@@ -274,23 +283,26 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         input.lastTradeTimestamp = lastTradeTimestamp;
         input.nowTimestamp = uint64(block.timestamp);
 
-        if (assetInAllowed && assetOutAllowed && adapterAllowed) {
-            (input.assets, input.balances, input.pricesUSDG1e18, priceTimestamp) = _valuationRows(action, prices);
+        bool policyInputsAllowed = assetInAllowed && assetOutAllowed && adapterAllowed;
+        ValuationRows memory rows = _valuationRows(action, prices, policyInputsAllowed);
+        priceTimestamp = rows.priceTimestamp;
+
+        if (policyInputsAllowed) {
+            input.assets = rows.assets;
+            input.balances = rows.balances;
+            input.pricesUSDG1e18 = rows.pricesUSDG1e18;
         }
 
         (code, preExposureBps, postExposureBps) = permissionEngine.evaluate(input);
     }
 
-    function _valuationRows(Action calldata action, PriceData[] calldata prices)
+    function _valuationRows(Action calldata action, PriceData[] calldata prices, bool includeRows)
         private
         view
-        returns (
-            address[] memory assets,
-            uint256[] memory balances,
-            uint256[] memory pricesUSDG1e18,
-            uint64 priceTimestamp
-        )
+        returns (ValuationRows memory rows)
     {
+        _validatePriceOrder(prices);
+
         address[] memory candidates = new address[](allowedAssetsList.length + 2);
         uint256 candidateCount;
 
@@ -304,23 +316,32 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         candidateCount = _appendUniqueAsset(candidates, candidateCount, action.assetIn);
         candidateCount = _appendUniqueAsset(candidates, candidateCount, action.assetOut);
         _sortAssets(candidates, candidateCount);
-        _validatePriceOrder(prices);
 
-        assets = new address[](candidateCount);
-        balances = new uint256[](candidateCount);
-        pricesUSDG1e18 = new uint256[](candidateCount);
-
-        uint64 minTimestamp = type(uint64).max;
-        for (uint256 i; i < candidateCount; ++i) {
-            address asset = candidates[i];
-            uint64 rowTimestamp;
-            assets[i] = asset;
-            balances[i] = IERC20(asset).balanceOf(address(this));
-            (pricesUSDG1e18[i], rowTimestamp) = _priceForAsset(asset, prices);
-            if (rowTimestamp < minTimestamp) minTimestamp = rowTimestamp;
+        if (includeRows) {
+            rows.assets = new address[](candidateCount);
+            rows.balances = new uint256[](candidateCount);
+            rows.pricesUSDG1e18 = new uint256[](candidateCount);
         }
 
-        if (candidateCount != 0) priceTimestamp = minTimestamp;
+        uint64 minTimestamp = type(uint64).max;
+        bool sawOraclePrice;
+        for (uint256 i; i < candidateCount; ++i) {
+            address asset = candidates[i];
+            (uint256 priceUSDG1e18, uint64 rowTimestamp) = _priceForAsset(asset, prices);
+
+            if (asset != usdg) {
+                sawOraclePrice = true;
+                if (rowTimestamp < minTimestamp) minTimestamp = rowTimestamp;
+            }
+
+            if (includeRows) {
+                rows.assets[i] = asset;
+                rows.balances[i] = IERC20(asset).balanceOf(address(this));
+                rows.pricesUSDG1e18[i] = priceUSDG1e18;
+            }
+        }
+
+        if (sawOraclePrice) rows.priceTimestamp = minTimestamp;
     }
 
     function _appendUniqueAsset(address[] memory assets, uint256 assetCount, address asset)
@@ -350,13 +371,12 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         }
     }
 
-    function _validatePriceOrder(PriceData[] calldata prices) private pure {
-        if (prices.length == 0) return;
-
-        address previousAsset = prices[0].asset;
-        for (uint256 i = 1; i < prices.length; ++i) {
+    function _validatePriceOrder(PriceData[] calldata prices) private view {
+        address previousAsset;
+        for (uint256 i; i < prices.length; ++i) {
             address currentAsset = prices[i].asset;
-            if (currentAsset <= previousAsset) revert UnsortedOrDuplicateAsset(currentAsset);
+            if (currentAsset == usdg) revert UnsortedOrDuplicateAsset(currentAsset);
+            if (i != 0 && currentAsset <= previousAsset) revert UnsortedOrDuplicateAsset(currentAsset);
             previousAsset = currentAsset;
         }
     }
@@ -366,6 +386,8 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         view
         returns (uint256 priceUSDG1e18, uint64 timestamp)
     {
+        if (asset == usdg) return (1 ether, 0);
+
         for (uint256 i; i < prices.length; ++i) {
             if (prices[i].asset == asset) {
                 return priceOracle.getPrice(asset, prices[i], address(this));

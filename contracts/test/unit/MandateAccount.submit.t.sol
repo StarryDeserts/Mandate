@@ -94,9 +94,9 @@ contract MandateAccountSubmitTest is Test {
     function setUp() public {
         vm.warp(2_000);
 
-        account = new MandateAccount(OWNER);
         usdg = new MockERC20("Mock USDG", "mUSDG");
         tsla = new MockERC20("Mock TSLA", "mTSLA");
+        account = new MandateAccount(OWNER, address(usdg));
         oracle = new PreviewPriceOracle();
 
         usdg.mint(address(account), 1_000 ether);
@@ -116,6 +116,10 @@ contract MandateAccountSubmitTest is Test {
         account.registerPriceOracle(oracle);
         _allowAssetsInReverseAddressOrder();
         vm.stopPrank();
+    }
+
+    function test_constructorStoresCanonicalUSDG() public view {
+        assertEq(account.usdg(), address(usdg));
     }
 
     function test_previewDangerousBuyReturnsExposureReasonWithPreAndPostBps() public view {
@@ -160,8 +164,7 @@ contract MandateAccountSubmitTest is Test {
 
     function test_previewRevertsWhenRequiredAssetPriceIsMissing() public {
         Action memory action = _buyTslaAction(100 ether);
-        PriceData[] memory prices = new PriceData[](1);
-        prices[0] = _priceData(address(usdg), 1 ether);
+        PriceData[] memory prices = new PriceData[](0);
 
         vm.expectRevert(abi.encodeWithSelector(MissingPrice.selector, address(tsla)));
         account.previewAction(action, prices);
@@ -176,7 +179,7 @@ contract MandateAccountSubmitTest is Test {
 
     function test_submitDangerousBuyStoresBlockedDecisionEmitsEventsAndConsumesNonce() public {
         Action memory action = _buyTslaAction(300 ether);
-        PriceData[] memory prices = _previewPricesWithTimestamps(1_900, 1_850);
+        PriceData[] memory prices = _previewPricesWithTimestamps(1_900);
         bytes32 actionId = account.computeActionId(action);
         bytes32 priceDigest = keccak256(abi.encode(prices));
 
@@ -184,7 +187,7 @@ contract MandateAccountSubmitTest is Test {
         emit ActionSubmitted(actionId, OWNER, Role.OWNER, DecisionStatus.BLOCKED);
         vm.expectEmit(true, false, false, true, address(account));
         emit ActionBlocked(
-            actionId, ReasonCode.SINGLE_ASSET_EXPOSURE_EXCEEDED, 1_666, 4_166, priceDigest, uint64(1_850)
+            actionId, ReasonCode.SINGLE_ASSET_EXPOSURE_EXCEEDED, 1_666, 4_166, priceDigest, uint64(1_900)
         );
 
         vm.prank(OWNER);
@@ -196,12 +199,12 @@ contract MandateAccountSubmitTest is Test {
         assertEq(preExposureBps, 1_666);
         assertEq(postExposureBps, 4_166);
         assertEq(account.nextNonce(), 1);
-        _assertDecision(actionId, DecisionStatus.BLOCKED, 1, uint64(block.timestamp), 0, priceDigest, uint64(1_850));
+        _assertDecision(actionId, DecisionStatus.BLOCKED, 1, uint64(block.timestamp), 0, priceDigest, uint64(1_900));
     }
 
     function test_submitSafeBuyStoresApprovedDecisionEmitsEventsAndConsumesNonce() public {
         Action memory action = _buyTslaAction(100 ether);
-        PriceData[] memory prices = _previewPricesWithTimestamps(1_900, 1_850);
+        PriceData[] memory prices = _previewPricesWithTimestamps(1_900);
         bytes32 actionId = account.computeActionId(action);
         bytes32 priceDigest = keccak256(abi.encode(prices));
         uint64 expiresAt = uint64(block.timestamp) + account.APPROVAL_TTL();
@@ -209,7 +212,7 @@ contract MandateAccountSubmitTest is Test {
         vm.expectEmit(true, true, false, true, address(account));
         emit ActionSubmitted(actionId, OWNER, Role.OWNER, DecisionStatus.APPROVED);
         vm.expectEmit(true, false, false, true, address(account));
-        emit ActionApproved(actionId, expiresAt, 1_666, 2_500, priceDigest, uint64(1_850));
+        emit ActionApproved(actionId, expiresAt, 1_666, 2_500, priceDigest, uint64(1_900));
 
         vm.prank(OWNER);
         (bytes32 returnedActionId, ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) =
@@ -221,7 +224,7 @@ contract MandateAccountSubmitTest is Test {
         assertEq(postExposureBps, 2_500);
         assertEq(account.nextNonce(), 1);
         _assertDecision(
-            actionId, DecisionStatus.APPROVED, 1, uint64(block.timestamp), expiresAt, priceDigest, uint64(1_850)
+            actionId, DecisionStatus.APPROVED, 1, uint64(block.timestamp), expiresAt, priceDigest, uint64(1_900)
         );
     }
 
@@ -295,9 +298,8 @@ contract MandateAccountSubmitTest is Test {
         account.registerPriceOracle(signedFeed);
         Action memory action = _buyTslaAction(100 ether);
         PriceData[] memory prices = _signedPrices(signedFeed, WRONG_PRICE_SIGNER_KEY);
-        address expectedRejectedAsset = address(usdg) < address(tsla) ? address(usdg) : address(tsla);
 
-        vm.expectRevert(abi.encodeWithSelector(PriceUnverified.selector, expectedRejectedAsset));
+        vm.expectRevert(abi.encodeWithSelector(PriceUnverified.selector, address(tsla)));
         vm.prank(OWNER);
         account.submitAction(action, prices);
 
@@ -306,8 +308,7 @@ contract MandateAccountSubmitTest is Test {
 
     function test_submitRevertsForMissingPriceAndLeavesNonceUnchanged() public {
         Action memory action = _buyTslaAction(100 ether);
-        PriceData[] memory prices = new PriceData[](1);
-        prices[0] = _priceData(address(usdg), 1 ether);
+        PriceData[] memory prices = new PriceData[](0);
 
         vm.expectRevert(abi.encodeWithSelector(MissingPrice.selector, address(tsla)));
         vm.prank(OWNER);
@@ -318,8 +319,7 @@ contract MandateAccountSubmitTest is Test {
 
     function test_submitRevertsForUnsortedPricesAndLeavesNonceUnchanged() public {
         Action memory action = _buyTslaAction(100 ether);
-        PriceData[] memory prices = _previewPrices();
-        _swapPrices(prices, 0, 1);
+        PriceData[] memory prices = _unsortedNonUSDGPrices();
 
         vm.expectRevert(abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, prices[1].asset));
         vm.prank(OWNER);
@@ -330,14 +330,149 @@ contract MandateAccountSubmitTest is Test {
 
     function test_submitRevertsForDuplicatePricesAndLeavesNonceUnchanged() public {
         Action memory action = _buyTslaAction(100 ether);
-        PriceData[] memory prices = _previewPrices();
-        prices[1] = prices[0];
+        PriceData[] memory prices = _duplicateTslaPrices();
 
         vm.expectRevert(abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, prices[1].asset));
         vm.prank(OWNER);
         account.submitAction(action, prices);
 
         assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitRevertsForUSDGPriceAndLeavesNonceUnchanged() public {
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = new PriceData[](1);
+        prices[0] = _priceData(address(usdg), 1 ether);
+
+        vm.expectRevert(abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, address(usdg)));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitRevertsForUnsortedPricesBeforeDisallowedAdapterAndLeavesNonceUnchanged() public {
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = _unsortedNonUSDGPrices();
+
+        vm.prank(OWNER);
+        account.setAdapterAllowed(ADAPTER, false);
+
+        vm.expectRevert(abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, prices[1].asset));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitRevertsForDuplicatePricesBeforeDisallowedAssetAndLeavesNonceUnchanged() public {
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = _duplicateTslaPrices();
+
+        vm.prank(OWNER);
+        account.setAssetAllowed(address(tsla), false);
+
+        vm.expectRevert(abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, prices[1].asset));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitRevertsForMissingPriceBeforeDisallowedAdapterAndLeavesNonceUnchanged() public {
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = new PriceData[](0);
+
+        vm.prank(OWNER);
+        account.setAdapterAllowed(ADAPTER, false);
+
+        vm.expectRevert(abi.encodeWithSelector(MissingPrice.selector, address(tsla)));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitRevertsForUnverifiedPriceBeforeDisallowedAssetAndLeavesNonceUnchanged() public {
+        SignedDemoPriceFeed signedFeed = new SignedDemoPriceFeed(vm.addr(PRICE_SIGNER_KEY), SIGNED_PRICE_MAX_STALENESS);
+        vm.prank(OWNER);
+        account.registerPriceOracle(signedFeed);
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = _signedPrices(signedFeed, WRONG_PRICE_SIGNER_KEY);
+
+        vm.prank(OWNER);
+        account.setAssetAllowed(address(tsla), false);
+
+        vm.expectRevert(abi.encodeWithSelector(PriceUnverified.selector, address(tsla)));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitValidPricesForDisallowedAdapterStoresBlockedDecisionAndConsumesNonce() public {
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = _previewPrices();
+        bytes32 actionId = account.computeActionId(action);
+        bytes32 priceDigest = keccak256(abi.encode(prices));
+
+        vm.prank(OWNER);
+        account.setAdapterAllowed(ADAPTER, false);
+
+        vm.expectEmit(true, true, false, true, address(account));
+        emit ActionSubmitted(actionId, OWNER, Role.OWNER, DecisionStatus.BLOCKED);
+        vm.expectEmit(true, false, false, true, address(account));
+        emit ActionBlocked(actionId, ReasonCode.ADAPTER_NOT_ALLOWED, 0, 0, priceDigest, uint64(1_900));
+
+        vm.prank(OWNER);
+        (bytes32 returnedActionId, ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) =
+            account.submitAction(action, prices);
+
+        assertEq(returnedActionId, actionId);
+        assertEq(uint8(code), uint8(ReasonCode.ADAPTER_NOT_ALLOWED));
+        assertEq(preExposureBps, 0);
+        assertEq(postExposureBps, 0);
+        assertEq(account.nextNonce(), 1);
+        _assertDecision(actionId, DecisionStatus.BLOCKED, 1, uint64(block.timestamp), 0, priceDigest, uint64(1_900));
+    }
+
+    function test_submitAllUSDGActionUsesZeroPriceTimestampWithEmptyPrices() public {
+        vm.startPrank(OWNER);
+        account.setAssetAllowed(address(tsla), false);
+        account.setMandate(
+            MandateConfig({
+                mandateVersion: 0,
+                maxSingleAssetExposureBps: 10_000,
+                maxTradeSizeUSDG: 1_000 ether,
+                maxDailyTurnoverBps: 10_000,
+                cooldownSeconds: 0
+            })
+        );
+        vm.stopPrank();
+
+        Action memory action = _usdgToUsdgAction(100 ether);
+        PriceData[] memory prices = new PriceData[](0);
+        bytes32 actionId = account.computeActionId(action);
+        bytes32 priceDigest = keccak256(abi.encode(prices));
+        uint64 expiresAt = uint64(block.timestamp) + account.APPROVAL_TTL();
+
+        vm.expectEmit(true, true, false, true, address(account));
+        emit ActionSubmitted(actionId, OWNER, Role.OWNER, DecisionStatus.APPROVED);
+        vm.expectEmit(true, false, false, true, address(account));
+        emit ActionApproved(actionId, expiresAt, 10_000, 10_000, priceDigest, uint64(0));
+
+        vm.prank(OWNER);
+        (bytes32 returnedActionId, ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) =
+            account.submitAction(action, prices);
+
+        assertEq(returnedActionId, actionId);
+        assertEq(uint8(code), uint8(ReasonCode.OK));
+        assertEq(preExposureBps, 10_000);
+        assertEq(postExposureBps, 10_000);
+        assertEq(account.nextNonce(), 1);
+        _assertDecision(
+            actionId, DecisionStatus.APPROVED, 2, uint64(block.timestamp), expiresAt, priceDigest, uint64(0)
+        );
     }
 
     function test_submitRevertsForMissingNonActionPortfolioAssetPriceAndLeavesNonceUnchanged() public {
@@ -408,31 +543,50 @@ contract MandateAccountSubmitTest is Test {
         });
     }
 
-    function _previewPrices() private view returns (PriceData[] memory prices) {
-        prices = _previewPricesWithTimestamps(1_900, 1_900);
+    function _usdgToUsdgAction(uint256 amountIn) private view returns (Action memory action) {
+        action = Action({
+            actionSchemaVersion: 1,
+            account: address(account),
+            nonce: 0,
+            actionType: ActionType.SWAP,
+            assetIn: address(usdg),
+            amountIn: amountIn,
+            assetOut: address(usdg),
+            minAmountOut: 0,
+            adapter: ADAPTER,
+            recipient: RECIPIENT,
+            deadline: 3_000
+        });
     }
 
-    function _previewPricesWithTimestamps(uint64 tslaTimestamp, uint64 usdgTimestamp)
-        private
-        view
-        returns (PriceData[] memory prices)
-    {
+    function _previewPrices() private view returns (PriceData[] memory prices) {
+        prices = _previewPricesWithTimestamps(1_900);
+    }
+
+    function _previewPricesWithTimestamps(uint64 tslaTimestamp) private view returns (PriceData[] memory prices) {
+        prices = new PriceData[](1);
+        prices[0] = _priceData(address(tsla), 2 ether, tslaTimestamp);
+    }
+
+    function _duplicateTslaPrices() private view returns (PriceData[] memory prices) {
         prices = new PriceData[](2);
-        PriceData memory tslaPrice = _priceData(address(tsla), 2 ether, tslaTimestamp);
-        PriceData memory usdgPrice = _priceData(address(usdg), 1 ether, usdgTimestamp);
-        if (address(tsla) < address(usdg)) {
+        prices[0] = _priceData(address(tsla), 2 ether);
+        prices[1] = _priceData(address(tsla), 2 ether);
+    }
+
+    function _unsortedNonUSDGPrices() private returns (PriceData[] memory prices) {
+        MockERC20 extra = new MockERC20("Mock Extra", "mEXT");
+        PriceData memory tslaPrice = _priceData(address(tsla), 2 ether);
+        PriceData memory extraPrice = _priceData(address(extra), 3 ether);
+        prices = new PriceData[](2);
+
+        if (address(tsla) > address(extra)) {
             prices[0] = tslaPrice;
-            prices[1] = usdgPrice;
+            prices[1] = extraPrice;
         } else {
-            prices[0] = usdgPrice;
+            prices[0] = extraPrice;
             prices[1] = tslaPrice;
         }
-    }
-
-    function _swapPrices(PriceData[] memory prices, uint256 firstIndex, uint256 secondIndex) private pure {
-        PriceData memory first = prices[firstIndex];
-        prices[firstIndex] = prices[secondIndex];
-        prices[secondIndex] = first;
     }
 
     function _priceData(address asset, uint256 priceUSDG1e18) private pure returns (PriceData memory price) {
@@ -468,16 +622,8 @@ contract MandateAccountSubmitTest is Test {
         view
         returns (PriceData[] memory prices)
     {
-        prices = new PriceData[](2);
-        PriceData memory tslaPrice = _signedPriceData(signedFeed, signingKey, address(tsla), 2 ether);
-        PriceData memory usdgPrice = _signedPriceData(signedFeed, signingKey, address(usdg), 1 ether);
-        if (address(tsla) < address(usdg)) {
-            prices[0] = tslaPrice;
-            prices[1] = usdgPrice;
-        } else {
-            prices[0] = usdgPrice;
-            prices[1] = tslaPrice;
-        }
+        prices = new PriceData[](1);
+        prices[0] = _signedPriceData(signedFeed, signingKey, address(tsla), 2 ether);
     }
 
     function _signedPriceData(SignedDemoPriceFeed signedFeed, uint256 signingKey, address asset, uint256 priceUSDG1e18)

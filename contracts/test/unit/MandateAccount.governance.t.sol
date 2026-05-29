@@ -11,7 +11,7 @@ import {Role} from "../../src/types/Enums.sol";
 import {MandateConfig, PriceData, SessionKey} from "../../src/types/Types.sol";
 
 contract MandateAccountHarness is MandateAccount {
-    constructor(address owner_) MandateAccount(owner_) {}
+    constructor(address owner_, address usdg_) MandateAccount(owner_, usdg_) {}
 
     function seedSessionKey(address key, SessionKey memory sessionKey) external {
         sessionKeys[key] = sessionKey;
@@ -65,8 +65,8 @@ contract MandateAccountGovernanceTest is Test {
 
     function setUp() public {
         vm.warp(1_000);
-        account = new MandateAccountHarness(OWNER);
         token = new MockERC20("Mock USDG", "mUSDG");
+        account = new MandateAccountHarness(OWNER, address(token));
     }
 
     function test_roleOfReturnsOwnerForOwner() public view {
