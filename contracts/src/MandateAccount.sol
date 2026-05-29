@@ -9,9 +9,10 @@ import {IAdapterRegistry} from "./interfaces/IAdapterRegistry.sol";
 import {IAssetRegistry} from "./interfaces/IAssetRegistry.sol";
 import {IMandateRegistry} from "./interfaces/IMandateRegistry.sol";
 import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
-import {Role} from "./types/Enums.sol";
-import {NotAuthorized, ReservedSessionKeyScope} from "./types/Errors.sol";
-import {Decision, MandateConfig, SessionKey} from "./types/Types.sol";
+import {EquityPermissionEngine} from "./lib/EquityPermissionEngine.sol";
+import {ReasonCode, Role} from "./types/Enums.sol";
+import {MissingPrice, NotAuthorized, ReservedSessionKeyScope} from "./types/Errors.sol";
+import {Action, Decision, EvalInput, MandateConfig, PriceData, SessionKey} from "./types/Types.sol";
 
 contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, ReentrancyGuard {
     using SafeERC20 for IERC20;
@@ -37,6 +38,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
     mapping(address => bool) public isAdapterAllowed;
     address[] public allowedAssetsList;
     IPriceOracle public priceOracle;
+    EquityPermissionEngine private immutable permissionEngine;
     uint256 public nextNonce;
     mapping(bytes32 => Decision) public decisions;
     uint256 public dailyTurnoverUsedUSDG;
@@ -45,6 +47,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
 
     constructor(address owner_) {
         owner = owner_;
+        permissionEngine = new EquityPermissionEngine();
     }
 
     function roleOf(address actor) public view returns (Role) {
@@ -139,6 +142,32 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         emit PriceOracleRegistered(address(oracle), oracle.signer());
     }
 
+    function previewAction(Action calldata action, PriceData[] calldata prices)
+        external
+        view
+        returns (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps)
+    {
+        bool assetInAllowed = isAssetAllowed[action.assetIn];
+        bool assetOutAllowed = isAssetAllowed[action.assetOut];
+        bool adapterAllowed = isAdapterAllowed[action.adapter];
+
+        EvalInput memory input;
+        input.action = action;
+        input.assetInAllowed = assetInAllowed;
+        input.assetOutAllowed = assetOutAllowed;
+        input.adapterAllowed = adapterAllowed;
+        input.mandate = mandate;
+        input.dailyTurnoverUsedUSDG = dailyTurnoverUsedUSDG;
+        input.lastTradeTimestamp = lastTradeTimestamp;
+        input.nowTimestamp = uint64(block.timestamp);
+
+        if (assetInAllowed && assetOutAllowed && adapterAllowed) {
+            (input.assets, input.balances, input.pricesUSDG1e18) = _valuationRows(action, prices);
+        }
+
+        return permissionEngine.evaluate(input);
+    }
+
     function getMandate() external view returns (MandateConfig memory) {
         return mandate;
     }
@@ -153,6 +182,75 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
 
     function getAllowedAssets() external view returns (address[] memory) {
         return allowedAssetsList;
+    }
+
+    function _valuationRows(Action calldata action, PriceData[] calldata prices)
+        private
+        view
+        returns (address[] memory assets, uint256[] memory balances, uint256[] memory pricesUSDG1e18)
+    {
+        address[] memory candidates = new address[](allowedAssetsList.length + 2);
+        uint256 candidateCount;
+
+        for (uint256 i; i < allowedAssetsList.length; ++i) {
+            address asset = allowedAssetsList[i];
+            if (IERC20(asset).balanceOf(address(this)) != 0) {
+                candidateCount = _appendUniqueAsset(candidates, candidateCount, asset);
+            }
+        }
+
+        candidateCount = _appendUniqueAsset(candidates, candidateCount, action.assetIn);
+        candidateCount = _appendUniqueAsset(candidates, candidateCount, action.assetOut);
+        _sortAssets(candidates, candidateCount);
+
+        assets = new address[](candidateCount);
+        balances = new uint256[](candidateCount);
+        pricesUSDG1e18 = new uint256[](candidateCount);
+
+        for (uint256 i; i < candidateCount; ++i) {
+            address asset = candidates[i];
+            assets[i] = asset;
+            balances[i] = IERC20(asset).balanceOf(address(this));
+            pricesUSDG1e18[i] = _priceForAsset(asset, prices);
+        }
+    }
+
+    function _appendUniqueAsset(address[] memory assets, uint256 assetCount, address asset)
+        private
+        pure
+        returns (uint256)
+    {
+        for (uint256 i; i < assetCount; ++i) {
+            if (assets[i] == asset) return assetCount;
+        }
+
+        assets[assetCount] = asset;
+        return assetCount + 1;
+    }
+
+    function _sortAssets(address[] memory assets, uint256 assetCount) private pure {
+        for (uint256 i = 1; i < assetCount; ++i) {
+            address key = assets[i];
+            uint256 j = i;
+
+            while (j != 0 && assets[j - 1] > key) {
+                assets[j] = assets[j - 1];
+                --j;
+            }
+
+            assets[j] = key;
+        }
+    }
+
+    function _priceForAsset(address asset, PriceData[] calldata prices) private view returns (uint256 priceUSDG1e18) {
+        for (uint256 i; i < prices.length; ++i) {
+            if (prices[i].asset == asset) {
+                (priceUSDG1e18,) = priceOracle.getPrice(asset, prices[i], address(this));
+                return priceUSDG1e18;
+            }
+        }
+
+        revert MissingPrice(asset);
     }
 
     function _removeAllowedAsset(address asset) internal {
