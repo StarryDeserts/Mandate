@@ -8,9 +8,12 @@ import {IAssetRegistry} from "./interfaces/IAssetRegistry.sol";
 import {IMandateRegistry} from "./interfaces/IMandateRegistry.sol";
 import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 import {Role} from "./types/Enums.sol";
+import {NotAuthorized} from "./types/Errors.sol";
 import {Decision, MandateConfig, SessionKey} from "./types/Types.sol";
 
 contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, ReentrancyGuard {
+    event MandateUpdated(uint64 mandateVersion, MandateConfig mandate);
+
     struct ActorContext {
         address actor;
         Role role;
@@ -41,6 +44,17 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         if (sessionKey.enabled && block.timestamp <= sessionKey.validUntil) return Role.SESSION;
 
         return Role.NONE;
+    }
+
+    function setMandate(MandateConfig memory config) external {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+
+        uint64 nextMandateVersion = mandate.mandateVersion + 1;
+        config.mandateVersion = nextMandateVersion;
+        mandate = config;
+
+        emit MandateUpdated(nextMandateVersion, config);
     }
 
     function getMandate() external view returns (MandateConfig memory) {
