@@ -8,7 +8,7 @@ import {IAssetRegistry} from "./interfaces/IAssetRegistry.sol";
 import {IMandateRegistry} from "./interfaces/IMandateRegistry.sol";
 import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
 import {Role} from "./types/Enums.sol";
-import {NotAuthorized} from "./types/Errors.sol";
+import {NotAuthorized, ReservedSessionKeyScope} from "./types/Errors.sol";
 import {Decision, MandateConfig, SessionKey} from "./types/Types.sol";
 
 contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, ReentrancyGuard {
@@ -16,6 +16,8 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
     event AssetAllowedSet(address indexed asset, bool allowed);
     event AdapterAllowedSet(address indexed adapter, bool allowed);
     event PriceOracleRegistered(address indexed oracle, address indexed signer);
+    event SessionKeyAdded(address indexed key, uint64 validUntil);
+    event SessionKeyRevoked(address indexed key);
 
     struct ActorContext {
         address actor;
@@ -47,6 +49,34 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         if (sessionKey.enabled && block.timestamp <= sessionKey.validUntil) return Role.SESSION;
 
         return Role.NONE;
+    }
+
+    function addSessionKey(address key, SessionKey memory sessionKey) external {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+        if (
+            sessionKey.allowedActionTypes != 0 || sessionKey.maxAmountInPerAction != 0
+                || sessionKey.scopeHash != bytes32(0)
+        ) revert ReservedSessionKeyScope();
+
+        sessionKeys[key] = SessionKey({
+            enabled: sessionKey.enabled,
+            validUntil: sessionKey.validUntil,
+            allowedActionTypes: 0,
+            maxAmountInPerAction: 0,
+            scopeHash: bytes32(0)
+        });
+
+        emit SessionKeyAdded(key, sessionKey.validUntil);
+    }
+
+    function revokeSessionKey(address key) external {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+
+        sessionKeys[key].enabled = false;
+
+        emit SessionKeyRevoked(key);
     }
 
     function setMandate(MandateConfig memory config) external {

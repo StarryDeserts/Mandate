@@ -10,6 +10,9 @@ import "./Enums.sol";
 /// Caller does not hold the required role.
 error NotAuthorized(Role role);
 
+/// Session key scope fields are reserved until Account Form A enforces them.
+error ReservedSessionKeyScope();
+
 /// Action.account does not match the target account contract.
 error WrongAccount(address expected, address got);
 
