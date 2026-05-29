@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Environment files
+.env
+.env.*
+
+# Foundry build artifacts
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Windows zone identifier files
+**/*.Zone.Identifier
+
+# macOS
+.DS_Store
+
+# Next.js
+web/.next/
+web/node_modules/
+
+# Build outputs
+out/
+dist/
