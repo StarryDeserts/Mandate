@@ -40,6 +40,9 @@ contract ApprovedSwapAdapterTest is Test {
     }
 
     function test_swapDeliversToRecipientReturnsActualOutAndLeavesNoResiduals() public {
+        vm.expectCall(address(tokenIn), abi.encodeWithSelector(tokenIn.approve.selector, address(amm), AMOUNT_IN));
+        vm.expectCall(address(tokenIn), abi.encodeWithSelector(tokenIn.approve.selector, address(amm), 0));
+
         vm.prank(TRADER);
         uint256 amountOut = adapter.swap(address(tokenIn), AMOUNT_IN, address(tokenOut), EXPECTED_AMOUNT_OUT, RECIPIENT);
 
