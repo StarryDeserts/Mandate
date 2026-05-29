@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 
 import {MandateAccount} from "../../src/MandateAccount.sol";
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
+import {MockERC20} from "../../src/mocks/MockERC20.sol";
 import {NotAuthorized} from "../../src/types/Errors.sol";
 import {Role} from "../../src/types/Enums.sol";
 import {MandateConfig, PriceData, SessionKey} from "../../src/types/Types.sol";
@@ -45,21 +46,27 @@ contract MandateAccountGovernanceTest is Test {
     event AssetAllowedSet(address indexed asset, bool allowed);
     event AdapterAllowedSet(address indexed adapter, bool allowed);
     event PriceOracleRegistered(address indexed oracle, address indexed signer);
+    event Withdrawn(address indexed asset, uint256 amount, address indexed to);
 
     address private constant OWNER = address(0xA11CE);
     address private constant SESSION = address(0x5E5510);
     address private constant STRANGER = address(0xB0B);
+    address private constant RECIPIENT = address(0xCAFE);
     address private constant ASSET_A = address(0xA55E7A);
     address private constant ASSET_B = address(0xA55E7B);
     address private constant ADAPTER = address(0xADA);
     address private constant PRICE_SIGNER = address(0x51A9E2);
     address private constant SECOND_PRICE_SIGNER = address(0x51A9E3);
+    uint256 private constant DEPOSIT_AMOUNT = 1_000 ether;
+    uint256 private constant WITHDRAW_AMOUNT = 125 ether;
 
     MandateAccountHarness private account;
+    MockERC20 private token;
 
     function setUp() public {
         vm.warp(1_000);
         account = new MandateAccountHarness(OWNER);
+        token = new MockERC20("Mock USDG", "mUSDG");
     }
 
     function test_roleOfReturnsOwnerForOwner() public view {
@@ -90,6 +97,53 @@ contract MandateAccountGovernanceTest is Test {
 
     function test_nextNonceStartsAtZero() public view {
         assertEq(account.nextNonce(), 0);
+    }
+
+    function test_plainTransferDepositsFundsIntoAccount() public {
+        token.mint(OWNER, DEPOSIT_AMOUNT);
+
+        vm.prank(OWNER);
+        bool transferred = token.transfer(address(account), DEPOSIT_AMOUNT);
+
+        assertTrue(transferred);
+        assertEq(token.balanceOf(address(account)), DEPOSIT_AMOUNT);
+        assertEq(token.balanceOf(OWNER), 0);
+    }
+
+    function test_ownerWithdrawTransfersTokensAndEmitsEvent() public {
+        _depositTokens(DEPOSIT_AMOUNT);
+
+        vm.expectEmit(true, true, false, true, address(account));
+        emit Withdrawn(address(token), WITHDRAW_AMOUNT, RECIPIENT);
+
+        vm.prank(OWNER);
+        account.withdraw(address(token), WITHDRAW_AMOUNT, RECIPIENT);
+
+        assertEq(token.balanceOf(address(account)), DEPOSIT_AMOUNT - WITHDRAW_AMOUNT);
+        assertEq(token.balanceOf(RECIPIENT), WITHDRAW_AMOUNT);
+    }
+
+    function test_withdrawRevertsForSessionKeyWithRoleBasedError() public {
+        account.seedSessionKey(SESSION, _sessionKey(true, 2_000));
+        _depositTokens(DEPOSIT_AMOUNT);
+
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.SESSION));
+        vm.prank(SESSION);
+        account.withdraw(address(token), WITHDRAW_AMOUNT, RECIPIENT);
+
+        assertEq(token.balanceOf(address(account)), DEPOSIT_AMOUNT);
+        assertEq(token.balanceOf(RECIPIENT), 0);
+    }
+
+    function test_withdrawRevertsForStrangerWithRoleBasedError() public {
+        _depositTokens(DEPOSIT_AMOUNT);
+
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.NONE));
+        vm.prank(STRANGER);
+        account.withdraw(address(token), WITHDRAW_AMOUNT, RECIPIENT);
+
+        assertEq(token.balanceOf(address(account)), DEPOSIT_AMOUNT);
+        assertEq(token.balanceOf(RECIPIENT), 0);
     }
 
     function test_resolveActorUsesMsgSenderAndCopiesSessionKey() public {
@@ -298,6 +352,13 @@ contract MandateAccountGovernanceTest is Test {
     function _setAdapterAllowedAsOwner(address adapter, bool allowed) private {
         vm.prank(OWNER);
         account.setAdapterAllowed(adapter, allowed);
+    }
+
+    function _depositTokens(uint256 amount) private {
+        token.mint(OWNER, amount);
+
+        vm.prank(OWNER);
+        token.transfer(address(account), amount);
     }
 
     function _assertAllowedAssetOccurrences(address asset, uint256 expectedCount) private view {

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
+import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 
 import {IAdapterRegistry} from "./interfaces/IAdapterRegistry.sol";
@@ -12,12 +14,15 @@ import {NotAuthorized, ReservedSessionKeyScope} from "./types/Errors.sol";
 import {Decision, MandateConfig, SessionKey} from "./types/Types.sol";
 
 contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, ReentrancyGuard {
+    using SafeERC20 for IERC20;
+
     event MandateUpdated(uint64 mandateVersion, MandateConfig mandate);
     event AssetAllowedSet(address indexed asset, bool allowed);
     event AdapterAllowedSet(address indexed adapter, bool allowed);
     event PriceOracleRegistered(address indexed oracle, address indexed signer);
     event SessionKeyAdded(address indexed key, uint64 validUntil);
     event SessionKeyRevoked(address indexed key);
+    event Withdrawn(address indexed asset, uint256 amount, address indexed to);
 
     struct ActorContext {
         address actor;
@@ -49,6 +54,15 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         if (sessionKey.enabled && block.timestamp <= sessionKey.validUntil) return Role.SESSION;
 
         return Role.NONE;
+    }
+
+    function withdraw(address asset, uint256 amount, address to) external nonReentrant {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+
+        IERC20(asset).safeTransfer(to, amount);
+
+        emit Withdrawn(asset, amount, to);
     }
 
     function addSessionKey(address key, SessionKey memory sessionKey) external {
