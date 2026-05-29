@@ -15,6 +15,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
     event MandateUpdated(uint64 mandateVersion, MandateConfig mandate);
     event AssetAllowedSet(address indexed asset, bool allowed);
     event AdapterAllowedSet(address indexed adapter, bool allowed);
+    event PriceOracleRegistered(address indexed oracle, address indexed signer);
 
     struct ActorContext {
         address actor;
@@ -83,6 +84,15 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         isAdapterAllowed[adapter] = allowed;
 
         emit AdapterAllowedSet(adapter, allowed);
+    }
+
+    function registerPriceOracle(IPriceOracle oracle) external {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+
+        priceOracle = oracle;
+
+        emit PriceOracleRegistered(address(oracle), oracle.signer());
     }
 
     function getMandate() external view returns (MandateConfig memory) {

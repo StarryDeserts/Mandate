@@ -4,9 +4,10 @@ pragma solidity 0.8.24;
 import {Test} from "forge-std/Test.sol";
 
 import {MandateAccount} from "../../src/MandateAccount.sol";
+import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
 import {NotAuthorized} from "../../src/types/Errors.sol";
 import {Role} from "../../src/types/Enums.sol";
-import {MandateConfig, SessionKey} from "../../src/types/Types.sol";
+import {MandateConfig, PriceData, SessionKey} from "../../src/types/Types.sol";
 
 contract MandateAccountHarness is MandateAccount {
     constructor(address owner_) MandateAccount(owner_) {}
@@ -20,10 +21,30 @@ contract MandateAccountHarness is MandateAccount {
     }
 }
 
+contract MockPriceOracle is IPriceOracle {
+    address public immutable signer;
+    uint64 public immutable maxStaleness;
+
+    constructor(address signer_, uint64 maxStaleness_) {
+        signer = signer_;
+        maxStaleness = maxStaleness_;
+    }
+
+    function getPrice(address, PriceData calldata, address)
+        external
+        pure
+        returns (uint256 priceUSDG1e18, uint64 timestamp)
+    {
+        priceUSDG1e18 = 1 ether;
+        timestamp = 1;
+    }
+}
+
 contract MandateAccountGovernanceTest is Test {
     event MandateUpdated(uint64 mandateVersion, MandateConfig mandate);
     event AssetAllowedSet(address indexed asset, bool allowed);
     event AdapterAllowedSet(address indexed adapter, bool allowed);
+    event PriceOracleRegistered(address indexed oracle, address indexed signer);
 
     address private constant OWNER = address(0xA11CE);
     address private constant SESSION = address(0x5E5510);
@@ -31,6 +52,8 @@ contract MandateAccountGovernanceTest is Test {
     address private constant ASSET_A = address(0xA55E7A);
     address private constant ASSET_B = address(0xA55E7B);
     address private constant ADAPTER = address(0xADA);
+    address private constant PRICE_SIGNER = address(0x51A9E2);
+    address private constant SECOND_PRICE_SIGNER = address(0x51A9E3);
 
     MandateAccountHarness private account;
 
@@ -206,6 +229,39 @@ contract MandateAccountGovernanceTest is Test {
         vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.NONE));
         vm.prank(STRANGER);
         account.setAdapterAllowed(ADAPTER, true);
+    }
+
+    function test_registerPriceOracleRevertsForSessionKeyWithRoleBasedError() public {
+        account.seedSessionKey(SESSION, _sessionKey(true, 2_000));
+        MockPriceOracle oracle = new MockPriceOracle(PRICE_SIGNER, 1 hours);
+
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.SESSION));
+        vm.prank(SESSION);
+        account.registerPriceOracle(oracle);
+    }
+
+    function test_registerPriceOracleStoresOracleAndEmitsSigner() public {
+        MockPriceOracle oracle = new MockPriceOracle(PRICE_SIGNER, 1 hours);
+
+        vm.expectEmit(true, true, false, true, address(account));
+        emit PriceOracleRegistered(address(oracle), PRICE_SIGNER);
+
+        vm.prank(OWNER);
+        account.registerPriceOracle(oracle);
+
+        assertEq(address(account.priceOracle()), address(oracle));
+    }
+
+    function test_registerPriceOracleAllowsOwnerToSwapOracle() public {
+        MockPriceOracle firstOracle = new MockPriceOracle(PRICE_SIGNER, 1 hours);
+        MockPriceOracle secondOracle = new MockPriceOracle(SECOND_PRICE_SIGNER, 2 hours);
+
+        vm.startPrank(OWNER);
+        account.registerPriceOracle(firstOracle);
+        account.registerPriceOracle(secondOracle);
+        vm.stopPrank();
+
+        assertEq(address(account.priceOracle()), address(secondOracle));
     }
 
     function _sessionKey(bool enabled, uint64 validUntil) private pure returns (SessionKey memory sessionKey) {
