@@ -89,11 +89,11 @@ contract ActionLibTest is Test {
     }
 
     function test_actionId_differs_across_account() public pure {
-        Action memory firstAccount = _defaultAction();
-        Action memory secondAccount = _defaultAction();
-        secondAccount.account = address(0xA11CE2);
+        Action memory action = _defaultAction();
+        bytes32 firstDomain = _domainSeparator(action.actionSchemaVersion, 1, action.account);
+        bytes32 secondDomain = _domainSeparator(action.actionSchemaVersion, 1, address(0xA11CE2));
 
-        assertTrue(_hash(firstAccount, 1) != _hash(secondAccount, 1));
+        assertTrue(ActionLib.hashAction(action, firstDomain) != ActionLib.hashAction(action, secondDomain));
     }
 
     function test_actionId_differs_across_chainId() public pure {
