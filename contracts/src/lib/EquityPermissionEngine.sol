@@ -41,13 +41,15 @@ contract EquityPermissionEngine is IEquityPermissionEngine {
         }
 
         uint256 tradeValueUSDG = Math.mulDiv(input.action.amountIn, valuation.assetInPriceUSDG1e18, USDG_SCALE);
-        (uint256 postAssetOutValueUSDG, uint256 postTotalValueUSDG) =
-            _postExposureValues(input, valuation, tradeValueUSDG);
-        preExposureBps = _exposureBps(valuation.assetOutValueUSDG, valuation.totalValueUSDG);
-        postExposureBps = _exposureBps(postAssetOutValueUSDG, postTotalValueUSDG);
+        if (valuation.totalValueUSDG != 0) {
+            (uint256 postAssetOutValueUSDG, uint256 postTotalValueUSDG) =
+                _postExposureValues(input, valuation, tradeValueUSDG);
+            preExposureBps = _exposureBps(valuation.assetOutValueUSDG, valuation.totalValueUSDG);
+            postExposureBps = _exposureBps(postAssetOutValueUSDG, postTotalValueUSDG);
 
-        if (_exposureExceeded(postAssetOutValueUSDG, postTotalValueUSDG, input.mandate.maxSingleAssetExposureBps)) {
-            return (ReasonCode.SINGLE_ASSET_EXPOSURE_EXCEEDED, preExposureBps, postExposureBps);
+            if (_exposureExceeded(postAssetOutValueUSDG, postTotalValueUSDG, input.mandate.maxSingleAssetExposureBps)) {
+                return (ReasonCode.SINGLE_ASSET_EXPOSURE_EXCEEDED, preExposureBps, postExposureBps);
+            }
         }
 
         if (tradeValueUSDG > input.mandate.maxTradeSizeUSDG) {

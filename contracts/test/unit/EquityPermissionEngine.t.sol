@@ -225,6 +225,21 @@ contract EquityPermissionEngineTest is Test {
         assertEq(postExposureBps, 1_428);
     }
 
+    function test_zeroTotalPortfolioSkipsExposureAndReturnsTradeSize() public view {
+        EvalInput memory input = _baseInput();
+        input.balances[0] = 0;
+        input.balances[1] = 0;
+        input.balances[2] = 0;
+        input.mandate.maxSingleAssetExposureBps = 9_999;
+        input.mandate.maxTradeSizeUSDG = 50 ether;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.TRADE_SIZE_EXCEEDED));
+        assertEq(preExposureBps, 0);
+        assertEq(postExposureBps, 0);
+    }
+
     function test_arrayLengthMismatchReturnsPriceStale() public view {
         EvalInput memory input = _baseInput();
         input.pricesUSDG1e18 = new uint256[](2);
