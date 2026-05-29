@@ -22,10 +22,15 @@ contract MandateAccountHarness is MandateAccount {
 
 contract MandateAccountGovernanceTest is Test {
     event MandateUpdated(uint64 mandateVersion, MandateConfig mandate);
+    event AssetAllowedSet(address indexed asset, bool allowed);
+    event AdapterAllowedSet(address indexed adapter, bool allowed);
 
     address private constant OWNER = address(0xA11CE);
     address private constant SESSION = address(0x5E5510);
     address private constant STRANGER = address(0xB0B);
+    address private constant ASSET_A = address(0xA55E7A);
+    address private constant ASSET_B = address(0xA55E7B);
+    address private constant ADAPTER = address(0xADA);
 
     MandateAccountHarness private account;
 
@@ -128,6 +133,81 @@ contract MandateAccountGovernanceTest is Test {
         _assertMandateEq(account.getMandate(), expectedConfig);
     }
 
+    function test_setAssetAllowedEnablesAssetAndAddsToEnumerableListOnce() public {
+        vm.expectEmit(true, false, false, true, address(account));
+        emit AssetAllowedSet(ASSET_A, true);
+        _setAssetAllowedAsOwner(ASSET_A, true);
+
+        vm.expectEmit(true, false, false, true, address(account));
+        emit AssetAllowedSet(ASSET_A, true);
+        _setAssetAllowedAsOwner(ASSET_A, true);
+
+        assertTrue(account.isAssetAllowed(ASSET_A));
+        assertEq(account.allowedAssetsCount(), 1);
+        address[] memory allowedAssets = account.getAllowedAssets();
+        assertEq(allowedAssets.length, 1);
+        assertEq(allowedAssets[0], ASSET_A);
+    }
+
+    function test_setAssetAllowedDisablesAssetAndRemovesFromEnumerableList() public {
+        _setAssetAllowedAsOwner(ASSET_A, true);
+        _setAssetAllowedAsOwner(ASSET_B, true);
+
+        vm.expectEmit(true, false, false, true, address(account));
+        emit AssetAllowedSet(ASSET_A, false);
+        _setAssetAllowedAsOwner(ASSET_A, false);
+
+        assertFalse(account.isAssetAllowed(ASSET_A));
+        assertTrue(account.isAssetAllowed(ASSET_B));
+        assertEq(account.allowedAssetsCount(), 1);
+        _assertAllowedAssetOccurrences(ASSET_A, 0);
+        _assertAllowedAssetOccurrences(ASSET_B, 1);
+    }
+
+    function test_setAssetAllowedDisableIsIdempotentForEnumerableList() public {
+        _setAssetAllowedAsOwner(ASSET_A, true);
+        _setAssetAllowedAsOwner(ASSET_A, false);
+
+        vm.expectEmit(true, false, false, true, address(account));
+        emit AssetAllowedSet(ASSET_A, false);
+        _setAssetAllowedAsOwner(ASSET_A, false);
+
+        assertFalse(account.isAssetAllowed(ASSET_A));
+        assertEq(account.allowedAssetsCount(), 0);
+        _assertAllowedAssetOccurrences(ASSET_A, 0);
+    }
+
+    function test_setAssetAllowedRevertsForSessionKeyWithRoleBasedError() public {
+        account.seedSessionKey(SESSION, _sessionKey(true, 2_000));
+
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.SESSION));
+        vm.prank(SESSION);
+        account.setAssetAllowed(ASSET_A, true);
+    }
+
+    function test_setAdapterAllowedUpdatesMappingAndEmitsEventOnEachCall() public {
+        vm.expectEmit(true, false, false, true, address(account));
+        emit AdapterAllowedSet(ADAPTER, true);
+        _setAdapterAllowedAsOwner(ADAPTER, true);
+        assertTrue(account.isAdapterAllowed(ADAPTER));
+
+        vm.expectEmit(true, false, false, true, address(account));
+        emit AdapterAllowedSet(ADAPTER, true);
+        _setAdapterAllowedAsOwner(ADAPTER, true);
+        assertTrue(account.isAdapterAllowed(ADAPTER));
+
+        vm.expectEmit(true, false, false, true, address(account));
+        emit AdapterAllowedSet(ADAPTER, false);
+        _setAdapterAllowedAsOwner(ADAPTER, false);
+        assertFalse(account.isAdapterAllowed(ADAPTER));
+    }
+
+    function test_setAdapterAllowedRevertsForStrangerWithRoleBasedError() public {
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.NONE));
+        vm.prank(STRANGER);
+        account.setAdapterAllowed(ADAPTER, true);
+    }
+
     function _sessionKey(bool enabled, uint64 validUntil) private pure returns (SessionKey memory sessionKey) {
         sessionKey = SessionKey({
             enabled: enabled,
@@ -152,6 +232,27 @@ contract MandateAccountGovernanceTest is Test {
             maxDailyTurnoverBps: maxDailyTurnoverBps_,
             cooldownSeconds: cooldownSeconds_
         });
+    }
+
+    function _setAssetAllowedAsOwner(address asset, bool allowed) private {
+        vm.prank(OWNER);
+        account.setAssetAllowed(asset, allowed);
+    }
+
+    function _setAdapterAllowedAsOwner(address adapter, bool allowed) private {
+        vm.prank(OWNER);
+        account.setAdapterAllowed(adapter, allowed);
+    }
+
+    function _assertAllowedAssetOccurrences(address asset, uint256 expectedCount) private view {
+        address[] memory allowedAssets = account.getAllowedAssets();
+        uint256 actualCount;
+
+        for (uint256 i; i < allowedAssets.length; ++i) {
+            if (allowedAssets[i] == asset) actualCount++;
+        }
+
+        assertEq(actualCount, expectedCount);
     }
 
     function _assertMandateEq(MandateConfig memory actual, MandateConfig memory expected) private pure {

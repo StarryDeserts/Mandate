@@ -13,6 +13,8 @@ import {Decision, MandateConfig, SessionKey} from "./types/Types.sol";
 
 contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, ReentrancyGuard {
     event MandateUpdated(uint64 mandateVersion, MandateConfig mandate);
+    event AssetAllowedSet(address indexed asset, bool allowed);
+    event AdapterAllowedSet(address indexed adapter, bool allowed);
 
     struct ActorContext {
         address actor;
@@ -57,6 +59,32 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         emit MandateUpdated(nextMandateVersion, config);
     }
 
+    function setAssetAllowed(address asset, bool allowed) external {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+
+        if (isAssetAllowed[asset] != allowed) {
+            isAssetAllowed[asset] = allowed;
+
+            if (allowed) {
+                allowedAssetsList.push(asset);
+            } else {
+                _removeAllowedAsset(asset);
+            }
+        }
+
+        emit AssetAllowedSet(asset, allowed);
+    }
+
+    function setAdapterAllowed(address adapter, bool allowed) external {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+
+        isAdapterAllowed[adapter] = allowed;
+
+        emit AdapterAllowedSet(adapter, allowed);
+    }
+
     function getMandate() external view returns (MandateConfig memory) {
         return mandate;
     }
@@ -71,6 +99,18 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
 
     function getAllowedAssets() external view returns (address[] memory) {
         return allowedAssetsList;
+    }
+
+    function _removeAllowedAsset(address asset) internal {
+        uint256 allowedAssetsLength = allowedAssetsList.length;
+
+        for (uint256 i; i < allowedAssetsLength; ++i) {
+            if (allowedAssetsList[i] == asset) {
+                allowedAssetsList[i] = allowedAssetsList[allowedAssetsLength - 1];
+                allowedAssetsList.pop();
+                return;
+            }
+        }
     }
 
     function _resolveActor() internal view returns (ActorContext memory context) {
