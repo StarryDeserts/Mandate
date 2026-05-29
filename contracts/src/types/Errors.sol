@@ -32,7 +32,7 @@ error SessionExpired(address key);
 // Execute-path errors (re-validation failures)
 // ---------------------------------------------------------------------------
 
-/// The action hash on re-entry does not match the stored digest.
+/// The execute-time action hash does not match the hash approved for this actionId.
 error ActionHashMismatch(bytes32 expected, bytes32 got);
 
 /// The stored decision is not in APPROVED state.
@@ -53,7 +53,7 @@ error AssetNotAllowedNow(address asset);
 /// The adapter that was allowed at approve-time is no longer allowed.
 error AdapterNotAllowedNow(address adapter);
 
-/// The recipient is not on the allowlist.
+/// The recipient is not locked to the account.
 error RecipientNotAllowed(address recipient);
 
 /// EquityPermissionEngine re-validation returned a non-OK reason code.

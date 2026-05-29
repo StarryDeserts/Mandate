@@ -1,11 +1,24 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.24;
 
-enum Role { NONE, SESSION, OWNER }
+enum Role {
+    NONE,
+    SESSION,
+    OWNER
+}
 
-enum ActionType { SWAP }
+enum ActionType {
+    SWAP
+}
 
-enum DecisionStatus { NONE, BLOCKED, APPROVED, EXECUTED, EXPIRED, CANCELLED }
+enum DecisionStatus {
+    NONE,
+    BLOCKED,
+    APPROVED,
+    EXECUTED,
+    EXPIRED,
+    CANCELLED
+}
 
 enum ReasonCode {
     OK,

@@ -54,6 +54,9 @@ struct MandateConfig {
 
 struct EvalInput {
     Action action;
+    bool assetInAllowed;
+    bool assetOutAllowed;
+    bool adapterAllowed;
     MandateConfig mandate;
     address[] assets;
     uint256[] balances;
