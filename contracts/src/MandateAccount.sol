@@ -5,7 +5,9 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
 import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
+import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
+import {IAdapter} from "./interfaces/IAdapter.sol";
 import {IAdapterRegistry} from "./interfaces/IAdapterRegistry.sol";
 import {IAssetRegistry} from "./interfaces/IAssetRegistry.sol";
 import {IMandateRegistry} from "./interfaces/IMandateRegistry.sol";
@@ -14,12 +16,21 @@ import {ActionLib} from "./lib/ActionLib.sol";
 import {EquityPermissionEngine} from "./lib/EquityPermissionEngine.sol";
 import {DecisionStatus, ReasonCode, Role} from "./types/Enums.sol";
 import {
+    AdapterNotAllowedNow,
+    ApprovalExpired,
+    AssetNotAllowedNow,
     BadActionSchema,
     BadNonce,
     DeadlinePassed,
+    MandateVersionChanged,
     MissingPrice,
+    NotApproved,
     NotAuthorized,
+    PostCheckFailed,
+    PriceStaleOnExecute,
+    RecipientNotAllowed,
     ReservedSessionKeyScope,
+    ReValidationFailed,
     SessionExpired,
     UnsortedOrDuplicateAsset,
     WrongAccount
@@ -31,6 +42,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
 
     uint16 public constant ACTION_SCHEMA_VERSION = 1;
     uint64 public constant APPROVAL_TTL = 15 minutes;
+    uint256 private constant USDG_SCALE = 1e18;
 
     bytes32 private constant ACTION_DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
@@ -60,6 +72,14 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         bytes32 priceDigest,
         uint64 priceTimestamp
     );
+    event ActionExecuted(
+        bytes32 indexed actionId,
+        uint256 amountIn,
+        uint256 amountOut,
+        uint16 postExposureBps,
+        bytes32 priceDigest,
+        uint64 priceTimestamp
+    );
 
     struct ActorContext {
         address actor;
@@ -72,6 +92,13 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         uint256[] balances;
         uint256[] pricesUSDG1e18;
         uint64 priceTimestamp;
+    }
+
+    struct ExecuteValidation {
+        uint16 postExposureBps;
+        bytes32 priceDigest;
+        uint64 priceTimestamp;
+        uint256 assetInPriceUSDG1e18;
     }
 
     address public owner;
@@ -239,6 +266,53 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         }
     }
 
+    function executeAction(Action calldata action, PriceData[] calldata prices)
+        external
+        nonReentrant
+        returns (uint256 amountOut)
+    {
+        ActorContext memory context = _resolveActor();
+        if (context.role == Role.NONE) {
+            if (context.sessionKey.enabled && block.timestamp > context.sessionKey.validUntil) {
+                revert SessionExpired(context.actor);
+            }
+
+            revert NotAuthorized(context.role);
+        }
+
+        if (action.account != address(this)) revert WrongAccount(address(this), action.account);
+        if (action.actionSchemaVersion != ACTION_SCHEMA_VERSION) {
+            revert BadActionSchema(ACTION_SCHEMA_VERSION, action.actionSchemaVersion);
+        }
+        if (block.timestamp > action.deadline) revert DeadlinePassed(action.deadline);
+
+        bytes32 actionId = computeActionId(action);
+        Decision storage decision = decisions[actionId];
+        DecisionStatus status = decision.status;
+        if (status != DecisionStatus.APPROVED) revert NotApproved(actionId, status);
+        if (block.timestamp > decision.expiresAt) revert ApprovalExpired(actionId, decision.expiresAt);
+        if (decision.mandateVersion != mandate.mandateVersion) {
+            revert MandateVersionChanged(decision.mandateVersion, mandate.mandateVersion);
+        }
+
+        ExecuteValidation memory validation = _revalidateForExecute(action, prices);
+
+        decision.status = DecisionStatus.EXECUTED;
+        _recordExecution(action, validation.assetInPriceUSDG1e18);
+
+        amountOut = _swapViaAdapter(action);
+        if (amountOut < action.minAmountOut) revert PostCheckFailed(action.minAmountOut, amountOut);
+
+        emit ActionExecuted(
+            actionId,
+            action.amountIn,
+            amountOut,
+            validation.postExposureBps,
+            validation.priceDigest,
+            validation.priceTimestamp
+        );
+    }
+
     function previewAction(Action calldata action, PriceData[] calldata prices)
         external
         view
@@ -264,6 +338,47 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         return allowedAssetsList;
     }
 
+    function _revalidateForExecute(Action calldata action, PriceData[] calldata prices)
+        private
+        view
+        returns (ExecuteValidation memory validation)
+    {
+        ValuationRows memory rows = _valuationRows(action, prices, true, true);
+        validation.priceTimestamp = rows.priceTimestamp;
+        validation.priceDigest = keccak256(abi.encode(prices));
+        validation.assetInPriceUSDG1e18 = _priceInRows(rows, action.assetIn);
+
+        if (!isAssetAllowed[action.assetIn]) revert AssetNotAllowedNow(action.assetIn);
+        if (!isAssetAllowed[action.assetOut]) revert AssetNotAllowedNow(action.assetOut);
+        if (!isAdapterAllowed[action.adapter]) revert AdapterNotAllowedNow(action.adapter);
+        if (action.recipient != address(this)) revert RecipientNotAllowed(action.recipient);
+
+        EvalInput memory input;
+        input.action = action;
+        input.assetInAllowed = true;
+        input.assetOutAllowed = true;
+        input.adapterAllowed = true;
+        input.mandate = mandate;
+        input.assets = rows.assets;
+        input.balances = rows.balances;
+        input.pricesUSDG1e18 = rows.pricesUSDG1e18;
+        input.dailyTurnoverUsedUSDG = dailyTurnoverUsedUSDG;
+        input.lastTradeTimestamp = lastTradeTimestamp;
+        input.nowTimestamp = uint64(block.timestamp);
+
+        ReasonCode code;
+        (code,, validation.postExposureBps) = permissionEngine.evaluate(input);
+        if (code != ReasonCode.OK) revert ReValidationFailed(code);
+    }
+
+    function _swapViaAdapter(Action calldata action) private returns (uint256 amountOut) {
+        IERC20 tokenIn = IERC20(action.assetIn);
+        tokenIn.forceApprove(action.adapter, action.amountIn);
+        amountOut = IAdapter(action.adapter)
+            .swap(action.assetIn, action.amountIn, action.assetOut, action.minAmountOut, address(this));
+        tokenIn.forceApprove(action.adapter, 0);
+    }
+
     function _evaluateAction(Action calldata action, PriceData[] calldata prices)
         private
         view
@@ -284,7 +399,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         input.nowTimestamp = uint64(block.timestamp);
 
         bool policyInputsAllowed = assetInAllowed && assetOutAllowed && adapterAllowed;
-        ValuationRows memory rows = _valuationRows(action, prices, policyInputsAllowed);
+        ValuationRows memory rows = _valuationRows(action, prices, policyInputsAllowed, false);
         priceTimestamp = rows.priceTimestamp;
 
         if (policyInputsAllowed) {
@@ -296,11 +411,12 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         (code, preExposureBps, postExposureBps) = permissionEngine.evaluate(input);
     }
 
-    function _valuationRows(Action calldata action, PriceData[] calldata prices, bool includeRows)
-        private
-        view
-        returns (ValuationRows memory rows)
-    {
+    function _valuationRows(
+        Action calldata action,
+        PriceData[] calldata prices,
+        bool includeRows,
+        bool checkExecuteFreshness
+    ) private view returns (ValuationRows memory rows) {
         _validatePriceOrder(prices);
 
         address[] memory candidates = new address[](allowedAssetsList.length + 2);
@@ -327,7 +443,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         bool sawOraclePrice;
         for (uint256 i; i < candidateCount; ++i) {
             address asset = candidates[i];
-            (uint256 priceUSDG1e18, uint64 rowTimestamp) = _priceForAsset(asset, prices);
+            (uint256 priceUSDG1e18, uint64 rowTimestamp) = _priceForAsset(asset, prices, checkExecuteFreshness);
 
             if (asset != usdg) {
                 sawOraclePrice = true;
@@ -381,7 +497,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         }
     }
 
-    function _priceForAsset(address asset, PriceData[] calldata prices)
+    function _priceForAsset(address asset, PriceData[] calldata prices, bool checkExecuteFreshness)
         private
         view
         returns (uint256 priceUSDG1e18, uint64 timestamp)
@@ -390,11 +506,38 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
 
         for (uint256 i; i < prices.length; ++i) {
             if (prices[i].asset == asset) {
+                if (checkExecuteFreshness) _revertIfPriceStaleOnExecute(asset, prices[i].timestamp);
                 return priceOracle.getPrice(asset, prices[i], address(this));
             }
         }
 
         revert MissingPrice(asset);
+    }
+
+    function _revertIfPriceStaleOnExecute(address asset, uint64 timestamp) private view {
+        uint64 maxStaleness = priceOracle.maxStaleness();
+        if (block.timestamp > uint256(timestamp) + uint256(maxStaleness)) {
+            revert PriceStaleOnExecute(asset, timestamp);
+        }
+    }
+
+    function _priceInRows(ValuationRows memory rows, address asset) private pure returns (uint256 priceUSDG1e18) {
+        for (uint256 i; i < rows.assets.length; ++i) {
+            if (rows.assets[i] == asset) return rows.pricesUSDG1e18[i];
+        }
+    }
+
+    function _recordExecution(Action calldata action, uint256 assetInPriceUSDG1e18) private {
+        uint64 currentDay = uint64(block.timestamp / 1 days);
+        uint256 usedTurnover = dailyTurnoverUsedUSDG;
+        if (currentDay > turnoverDay) {
+            turnoverDay = currentDay;
+            usedTurnover = 0;
+        }
+
+        uint256 tradeValueUSDG = Math.mulDiv(action.amountIn, assetInPriceUSDG1e18, USDG_SCALE);
+        dailyTurnoverUsedUSDG = usedTurnover + tradeValueUSDG;
+        lastTradeTimestamp = uint64(block.timestamp);
     }
 
     function _actionDomainSeparator(uint16 actionSchemaVersion) private view returns (bytes32) {
