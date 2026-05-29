@@ -56,6 +56,25 @@ contract ApprovedSwapAdapterTest is Test {
         assertEq(tokenIn.allowance(address(adapter), address(amm)), 0);
     }
 
+    function test_swapRevertsWhenRecipientIsAdapterAndKeepsBalancesUnchanged() public {
+        uint256 traderInputBefore = tokenIn.balanceOf(TRADER);
+        uint256 ammInputBefore = tokenIn.balanceOf(address(amm));
+        uint256 ammOutputBefore = tokenOut.balanceOf(address(amm));
+        uint256 adapterInputBefore = tokenIn.balanceOf(address(adapter));
+        uint256 adapterOutputBefore = tokenOut.balanceOf(address(adapter));
+
+        vm.expectRevert(bytes4(keccak256("AdapterRecipientIsSelf()")));
+        vm.prank(TRADER);
+        adapter.swap(address(tokenIn), AMOUNT_IN, address(tokenOut), EXPECTED_AMOUNT_OUT, address(adapter));
+
+        assertEq(tokenIn.balanceOf(TRADER), traderInputBefore);
+        assertEq(tokenIn.balanceOf(address(amm)), ammInputBefore);
+        assertEq(tokenOut.balanceOf(address(amm)), ammOutputBefore);
+        assertEq(tokenIn.balanceOf(address(adapter)), adapterInputBefore);
+        assertEq(tokenOut.balanceOf(address(adapter)), adapterOutputBefore);
+        assertEq(tokenIn.allowance(address(adapter), address(amm)), 0);
+    }
+
     function test_swapRevertsWhenQuoteIsBelowMinOutAndKeepsBalancesUnchanged() public {
         uint256 traderInputBefore = tokenIn.balanceOf(TRADER);
         uint256 ammInputBefore = tokenIn.balanceOf(address(amm));

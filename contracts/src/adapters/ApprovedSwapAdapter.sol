@@ -10,6 +10,8 @@ import {MockAMM} from "../mocks/MockAMM.sol";
 contract ApprovedSwapAdapter is IAdapter {
     using SafeERC20 for IERC20;
 
+    error AdapterRecipientIsSelf();
+
     MockAMM public immutable amm;
 
     constructor(MockAMM amm_) {
@@ -20,6 +22,8 @@ contract ApprovedSwapAdapter is IAdapter {
         external
         returns (uint256 amountOut)
     {
+        if (recipient == address(this)) revert AdapterRecipientIsSelf();
+
         IERC20 tokenIn = IERC20(assetIn);
 
         tokenIn.safeTransferFrom(msg.sender, address(this), amountIn);
