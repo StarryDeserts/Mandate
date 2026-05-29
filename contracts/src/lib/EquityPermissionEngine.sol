@@ -41,10 +41,12 @@ contract EquityPermissionEngine is IEquityPermissionEngine {
         }
 
         uint256 tradeValueUSDG = Math.mulDiv(input.action.amountIn, valuation.assetInPriceUSDG1e18, USDG_SCALE);
+        (uint256 postAssetOutValueUSDG, uint256 postTotalValueUSDG) =
+            _postExposureValues(input, valuation, tradeValueUSDG);
         preExposureBps = _exposureBps(valuation.assetOutValueUSDG, valuation.totalValueUSDG);
-        postExposureBps = _postExposureBps(input, valuation, tradeValueUSDG);
+        postExposureBps = _exposureBps(postAssetOutValueUSDG, postTotalValueUSDG);
 
-        if (postExposureBps > input.mandate.maxSingleAssetExposureBps) {
+        if (_exposureExceeded(postAssetOutValueUSDG, postTotalValueUSDG, input.mandate.maxSingleAssetExposureBps)) {
             return (ReasonCode.SINGLE_ASSET_EXPOSURE_EXCEEDED, preExposureBps, postExposureBps);
         }
 
@@ -74,12 +76,16 @@ contract EquityPermissionEngine is IEquityPermissionEngine {
         }
 
         for (uint256 i = 0; i < assetCount; ++i) {
+            address asset = input.assets[i];
+            if (i != 0 && asset <= input.assets[i - 1]) {
+                return (false, valuation);
+            }
+
             uint256 priceUSDG1e18 = input.pricesUSDG1e18[i];
             if (priceUSDG1e18 == 0) {
                 return (false, valuation);
             }
 
-            address asset = input.assets[i];
             uint256 valueUSDG = Math.mulDiv(input.balances[i], priceUSDG1e18, USDG_SCALE);
             valuation.totalValueUSDG += valueUSDG;
 
@@ -98,21 +104,19 @@ contract EquityPermissionEngine is IEquityPermissionEngine {
         return (valuation.foundAssetIn && valuation.foundAssetOut, valuation);
     }
 
-    function _postExposureBps(EvalInput calldata input, Valuation memory valuation, uint256 tradeValueUSDG)
+    function _postExposureValues(EvalInput calldata input, Valuation memory valuation, uint256 tradeValueUSDG)
         private
         pure
-        returns (uint16)
+        returns (uint256 postAssetOutValueUSDG, uint256 postTotalValueUSDG)
     {
         if (input.action.assetIn == input.action.assetOut) {
-            return _exposureBps(valuation.assetOutValueUSDG, valuation.totalValueUSDG);
+            return (valuation.assetOutValueUSDG, valuation.totalValueUSDG);
         }
 
         uint256 assetInReductionUSDG =
             tradeValueUSDG > valuation.assetInValueUSDG ? valuation.assetInValueUSDG : tradeValueUSDG;
-        uint256 postTotalValueUSDG = valuation.totalValueUSDG - assetInReductionUSDG + tradeValueUSDG;
-        uint256 postAssetOutValueUSDG = valuation.assetOutValueUSDG + tradeValueUSDG;
-
-        return _exposureBps(postAssetOutValueUSDG, postTotalValueUSDG);
+        postTotalValueUSDG = valuation.totalValueUSDG - assetInReductionUSDG + tradeValueUSDG;
+        postAssetOutValueUSDG = valuation.assetOutValueUSDG + tradeValueUSDG;
     }
 
     function _turnoverExceeded(EvalInput calldata input, uint256 totalValueUSDG, uint256 tradeValueUSDG)
@@ -125,6 +129,18 @@ contract EquityPermissionEngine is IEquityPermissionEngine {
 
         return input.dailyTurnoverUsedUSDG > allowedDailyTurnoverUSDG
             || tradeValueUSDG > allowedDailyTurnoverUSDG - input.dailyTurnoverUsedUSDG;
+    }
+
+    function _exposureExceeded(uint256 assetValueUSDG, uint256 totalValueUSDG, uint16 maxExposureBps)
+        private
+        pure
+        returns (bool)
+    {
+        if (totalValueUSDG == 0) {
+            return false;
+        }
+
+        return Math.mulDiv(assetValueUSDG, BPS_DENOMINATOR, totalValueUSDG, Math.Rounding.Ceil) > maxExposureBps;
     }
 
     function _exposureBps(uint256 assetValueUSDG, uint256 totalValueUSDG) private pure returns (uint16) {

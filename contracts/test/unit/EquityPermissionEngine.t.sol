@@ -32,6 +32,38 @@ contract EquityPermissionEngineTest is Test {
         assertEq(postExposureBps, 4_000);
     }
 
+    function test_fractionalExposureOverCapReturnsExposureReasonEvenWhenDisplayedBpsEqualCap() public view {
+        EvalInput memory input = _baseInput();
+        input.mandate.maxSingleAssetExposureBps = 6_666;
+        input.assets = new address[](2);
+        input.assets[0] = USDG;
+        input.assets[1] = TSLA;
+        input.balances = new uint256[](2);
+        input.balances[0] = 2 ether;
+        input.balances[1] = 1 ether;
+        input.pricesUSDG1e18 = new uint256[](2);
+        input.pricesUSDG1e18[0] = 1 ether;
+        input.pricesUSDG1e18[1] = 1 ether;
+        input.action.amountIn = 1 ether;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.SINGLE_ASSET_EXPOSURE_EXCEEDED));
+        assertEq(preExposureBps, 3_333);
+        assertEq(postExposureBps, 6_666);
+    }
+
+    function test_exactExposureCapPasses() public view {
+        EvalInput memory input = _baseInput();
+        input.mandate.maxSingleAssetExposureBps = 4_000;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.OK));
+        assertEq(preExposureBps, 3_000);
+        assertEq(postExposureBps, 4_000);
+    }
+
     function test_tradeSizeOverCapReturnsTradeSizeWhenExposurePasses() public view {
         EvalInput memory input = _baseInput();
         input.action.amountIn = 60 ether;
@@ -43,6 +75,18 @@ contract EquityPermissionEngineTest is Test {
         assertEq(uint8(code), uint8(ReasonCode.TRADE_SIZE_EXCEEDED));
         assertEq(preExposureBps, 3_000);
         assertEq(postExposureBps, 3_600);
+    }
+
+    function test_exactTradeSizeCapPasses() public view {
+        EvalInput memory input = _baseInput();
+        input.mandate.maxSingleAssetExposureBps = 10_000;
+        input.mandate.maxTradeSizeUSDG = 100 ether;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.OK));
+        assertEq(preExposureBps, 3_000);
+        assertEq(postExposureBps, 4_000);
     }
 
     function test_turnoverOverCapReturnsDailyTurnoverWhenEarlierChecksPass() public view {
@@ -60,6 +104,19 @@ contract EquityPermissionEngineTest is Test {
         assertEq(postExposureBps, 3_600);
     }
 
+    function test_exactTurnoverCapPasses() public view {
+        EvalInput memory input = _baseInput();
+        input.mandate.maxSingleAssetExposureBps = 10_000;
+        input.mandate.maxTradeSizeUSDG = 100 ether;
+        input.mandate.maxDailyTurnoverBps = 1_000;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.OK));
+        assertEq(preExposureBps, 3_000);
+        assertEq(postExposureBps, 4_000);
+    }
+
     function test_cooldownActiveReturnsCooldownWhenEarlierChecksPass() public view {
         EvalInput memory input = _baseInput();
         input.mandate.maxSingleAssetExposureBps = 10_000;
@@ -72,6 +129,22 @@ contract EquityPermissionEngineTest is Test {
         (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
 
         assertEq(uint8(code), uint8(ReasonCode.COOLDOWN_ACTIVE));
+        assertEq(preExposureBps, 3_000);
+        assertEq(postExposureBps, 4_000);
+    }
+
+    function test_cooldownExactlyAtExpiryPasses() public view {
+        EvalInput memory input = _baseInput();
+        input.mandate.maxSingleAssetExposureBps = 10_000;
+        input.mandate.maxTradeSizeUSDG = 200 ether;
+        input.mandate.maxDailyTurnoverBps = 10_000;
+        input.mandate.cooldownSeconds = 200;
+        input.lastTradeTimestamp = 1_000;
+        input.nowTimestamp = 1_200;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.OK));
         assertEq(preExposureBps, 3_000);
         assertEq(postExposureBps, 4_000);
     }
@@ -107,6 +180,75 @@ contract EquityPermissionEngineTest is Test {
     function test_missingRequiredPriceDataReturnsPriceStaleBeforeExposure() public view {
         EvalInput memory input = _baseInput();
         input.pricesUSDG1e18[1] = 0;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.PRICE_STALE));
+        assertEq(preExposureBps, 0);
+        assertEq(postExposureBps, 0);
+    }
+
+    function test_duplicateAssetRowsReturnPriceStale() public view {
+        EvalInput memory input = _baseInput();
+        input.assets[2] = TSLA;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.PRICE_STALE));
+        assertEq(preExposureBps, 0);
+        assertEq(postExposureBps, 0);
+    }
+
+    function test_unsortedAssetRowsReturnPriceStale() public view {
+        EvalInput memory input = _baseInput();
+        input.assets[0] = TSLA;
+        input.assets[1] = USDG;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.PRICE_STALE));
+        assertEq(preExposureBps, 0);
+        assertEq(postExposureBps, 0);
+    }
+
+    function test_zeroCurrentBalanceActionAssetRowAllowsFirstBuy() public view {
+        EvalInput memory input = _baseInput();
+        input.balances[1] = 0;
+        input.mandate.maxSingleAssetExposureBps = 2_000;
+        input.mandate.maxTradeSizeUSDG = 100 ether;
+        input.mandate.maxDailyTurnoverBps = 10_000;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.OK));
+        assertEq(preExposureBps, 0);
+        assertEq(postExposureBps, 1_428);
+    }
+
+    function test_arrayLengthMismatchReturnsPriceStale() public view {
+        EvalInput memory input = _baseInput();
+        input.pricesUSDG1e18 = new uint256[](2);
+        input.pricesUSDG1e18[0] = 1 ether;
+        input.pricesUSDG1e18[1] = 10 ether;
+
+        (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
+
+        assertEq(uint8(code), uint8(ReasonCode.PRICE_STALE));
+        assertEq(preExposureBps, 0);
+        assertEq(postExposureBps, 0);
+    }
+
+    function test_missingActionAssetRowReturnsPriceStale() public view {
+        EvalInput memory input = _baseInput();
+        input.assets = new address[](2);
+        input.assets[0] = USDG;
+        input.assets[1] = AMD;
+        input.balances = new uint256[](2);
+        input.balances[0] = 600 ether;
+        input.balances[1] = 20 ether;
+        input.pricesUSDG1e18 = new uint256[](2);
+        input.pricesUSDG1e18[0] = 1 ether;
+        input.pricesUSDG1e18[1] = 5 ether;
 
         (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps) = engine.evaluate(input);
 
