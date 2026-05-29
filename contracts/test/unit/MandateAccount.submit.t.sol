@@ -18,6 +18,7 @@ import {
     NotAuthorized,
     PriceUnverified,
     SessionExpired,
+    UnsortedOrDuplicateAsset,
     WrongAccount
 } from "../../src/types/Errors.sol";
 import {Action, MandateConfig, PriceData, SessionKey} from "../../src/types/Types.sol";
@@ -315,6 +316,45 @@ contract MandateAccountSubmitTest is Test {
         assertEq(account.nextNonce(), 0);
     }
 
+    function test_submitRevertsForUnsortedPricesAndLeavesNonceUnchanged() public {
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = _previewPrices();
+        _swapPrices(prices, 0, 1);
+
+        vm.expectRevert(abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, prices[1].asset));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitRevertsForDuplicatePricesAndLeavesNonceUnchanged() public {
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = _previewPrices();
+        prices[1] = prices[0];
+
+        vm.expectRevert(abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, prices[1].asset));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
+    function test_submitRevertsForMissingNonActionPortfolioAssetPriceAndLeavesNonceUnchanged() public {
+        MockERC20 portfolioAsset = new MockERC20("Mock NVDA", "mNVDA");
+        portfolioAsset.mint(address(account), 50 ether);
+        vm.prank(OWNER);
+        account.setAssetAllowed(address(portfolioAsset), true);
+        Action memory action = _buyTslaAction(100 ether);
+        PriceData[] memory prices = _previewPrices();
+
+        vm.expectRevert(abi.encodeWithSelector(MissingPrice.selector, address(portfolioAsset)));
+        vm.prank(OWNER);
+        account.submitAction(action, prices);
+
+        assertEq(account.nextNonce(), 0);
+    }
+
     function test_submitRevertsForExpiredEnabledSessionKeyAndLeavesNonceUnchanged() public {
         _addSessionKey(SESSION, true, 2_100);
         vm.warp(2_101);
@@ -378,8 +418,21 @@ contract MandateAccountSubmitTest is Test {
         returns (PriceData[] memory prices)
     {
         prices = new PriceData[](2);
-        prices[0] = _priceData(address(tsla), 2 ether, tslaTimestamp);
-        prices[1] = _priceData(address(usdg), 1 ether, usdgTimestamp);
+        PriceData memory tslaPrice = _priceData(address(tsla), 2 ether, tslaTimestamp);
+        PriceData memory usdgPrice = _priceData(address(usdg), 1 ether, usdgTimestamp);
+        if (address(tsla) < address(usdg)) {
+            prices[0] = tslaPrice;
+            prices[1] = usdgPrice;
+        } else {
+            prices[0] = usdgPrice;
+            prices[1] = tslaPrice;
+        }
+    }
+
+    function _swapPrices(PriceData[] memory prices, uint256 firstIndex, uint256 secondIndex) private pure {
+        PriceData memory first = prices[firstIndex];
+        prices[firstIndex] = prices[secondIndex];
+        prices[secondIndex] = first;
     }
 
     function _priceData(address asset, uint256 priceUSDG1e18) private pure returns (PriceData memory price) {
@@ -416,8 +469,15 @@ contract MandateAccountSubmitTest is Test {
         returns (PriceData[] memory prices)
     {
         prices = new PriceData[](2);
-        prices[0] = _signedPriceData(signedFeed, signingKey, address(tsla), 2 ether);
-        prices[1] = _signedPriceData(signedFeed, signingKey, address(usdg), 1 ether);
+        PriceData memory tslaPrice = _signedPriceData(signedFeed, signingKey, address(tsla), 2 ether);
+        PriceData memory usdgPrice = _signedPriceData(signedFeed, signingKey, address(usdg), 1 ether);
+        if (address(tsla) < address(usdg)) {
+            prices[0] = tslaPrice;
+            prices[1] = usdgPrice;
+        } else {
+            prices[0] = usdgPrice;
+            prices[1] = tslaPrice;
+        }
     }
 
     function _signedPriceData(SignedDemoPriceFeed signedFeed, uint256 signingKey, address asset, uint256 priceUSDG1e18)

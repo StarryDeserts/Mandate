@@ -21,6 +21,7 @@ import {
     NotAuthorized,
     ReservedSessionKeyScope,
     SessionExpired,
+    UnsortedOrDuplicateAsset,
     WrongAccount
 } from "./types/Errors.sol";
 import {Action, Decision, EvalInput, MandateConfig, PriceData, SessionKey} from "./types/Types.sol";
@@ -303,6 +304,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         candidateCount = _appendUniqueAsset(candidates, candidateCount, action.assetIn);
         candidateCount = _appendUniqueAsset(candidates, candidateCount, action.assetOut);
         _sortAssets(candidates, candidateCount);
+        _validatePriceOrder(prices);
 
         assets = new address[](candidateCount);
         balances = new uint256[](candidateCount);
@@ -345,6 +347,17 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
             }
 
             assets[j] = key;
+        }
+    }
+
+    function _validatePriceOrder(PriceData[] calldata prices) private pure {
+        if (prices.length == 0) return;
+
+        address previousAsset = prices[0].asset;
+        for (uint256 i = 1; i < prices.length; ++i) {
+            address currentAsset = prices[i].asset;
+            if (currentAsset <= previousAsset) revert UnsortedOrDuplicateAsset(currentAsset);
+            previousAsset = currentAsset;
         }
     }
 
