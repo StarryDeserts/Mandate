@@ -4,18 +4,36 @@ pragma solidity 0.8.24;
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
+import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 
 import {IAdapterRegistry} from "./interfaces/IAdapterRegistry.sol";
 import {IAssetRegistry} from "./interfaces/IAssetRegistry.sol";
 import {IMandateRegistry} from "./interfaces/IMandateRegistry.sol";
 import {IPriceOracle} from "./interfaces/IPriceOracle.sol";
+import {ActionLib} from "./lib/ActionLib.sol";
 import {EquityPermissionEngine} from "./lib/EquityPermissionEngine.sol";
-import {ReasonCode, Role} from "./types/Enums.sol";
-import {MissingPrice, NotAuthorized, ReservedSessionKeyScope} from "./types/Errors.sol";
+import {DecisionStatus, ReasonCode, Role} from "./types/Enums.sol";
+import {
+    BadActionSchema,
+    BadNonce,
+    DeadlinePassed,
+    MissingPrice,
+    NotAuthorized,
+    ReservedSessionKeyScope,
+    SessionExpired,
+    WrongAccount
+} from "./types/Errors.sol";
 import {Action, Decision, EvalInput, MandateConfig, PriceData, SessionKey} from "./types/Types.sol";
 
 contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    uint16 public constant ACTION_SCHEMA_VERSION = 1;
+    uint64 public constant APPROVAL_TTL = 15 minutes;
+
+    bytes32 private constant ACTION_DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+    string private constant ACTION_DOMAIN_NAME = "MandateAction";
 
     event MandateUpdated(uint64 mandateVersion, MandateConfig mandate);
     event AssetAllowedSet(address indexed asset, bool allowed);
@@ -24,6 +42,23 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
     event SessionKeyAdded(address indexed key, uint64 validUntil);
     event SessionKeyRevoked(address indexed key);
     event Withdrawn(address indexed asset, uint256 amount, address indexed to);
+    event ActionSubmitted(bytes32 indexed actionId, address indexed actor, Role role, DecisionStatus status);
+    event ActionBlocked(
+        bytes32 indexed actionId,
+        ReasonCode reason,
+        uint16 preExposureBps,
+        uint16 postExposureBps,
+        bytes32 priceDigest,
+        uint64 priceTimestamp
+    );
+    event ActionApproved(
+        bytes32 indexed actionId,
+        uint64 expiresAt,
+        uint16 preExposureBps,
+        uint16 postExposureBps,
+        bytes32 priceDigest,
+        uint64 priceTimestamp
+    );
 
     struct ActorContext {
         address actor;
@@ -142,30 +177,65 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         emit PriceOracleRegistered(address(oracle), oracle.signer());
     }
 
+    function computeActionId(Action calldata action) public view returns (bytes32) {
+        Action memory actionMemory = action;
+        return ActionLib.hashAction(actionMemory, _actionDomainSeparator(action.actionSchemaVersion));
+    }
+
+    function submitAction(Action calldata action, PriceData[] calldata prices)
+        external
+        returns (bytes32 actionId, ReasonCode code, uint16 preExposureBps, uint16 postExposureBps)
+    {
+        ActorContext memory context = _resolveActor();
+        if (context.role == Role.NONE) {
+            if (context.sessionKey.enabled && block.timestamp > context.sessionKey.validUntil) {
+                revert SessionExpired(context.actor);
+            }
+
+            revert NotAuthorized(context.role);
+        }
+
+        if (action.account != address(this)) revert WrongAccount(address(this), action.account);
+        if (action.actionSchemaVersion != ACTION_SCHEMA_VERSION) {
+            revert BadActionSchema(ACTION_SCHEMA_VERSION, action.actionSchemaVersion);
+        }
+        if (action.nonce != nextNonce) revert BadNonce(nextNonce, action.nonce);
+        if (block.timestamp > action.deadline) revert DeadlinePassed(action.deadline);
+
+        uint64 priceTimestamp;
+        actionId = computeActionId(action);
+        (code, preExposureBps, postExposureBps, priceTimestamp) = _evaluateAction(action, prices);
+
+        bytes32 priceDigest = keccak256(abi.encode(prices));
+        DecisionStatus status = code == ReasonCode.OK ? DecisionStatus.APPROVED : DecisionStatus.BLOCKED;
+        uint64 submittedAt = uint64(block.timestamp);
+        uint64 expiresAt = status == DecisionStatus.APPROVED ? submittedAt + APPROVAL_TTL : 0;
+
+        decisions[actionId] = Decision({
+            status: status,
+            mandateVersion: mandate.mandateVersion,
+            submittedAt: submittedAt,
+            expiresAt: expiresAt,
+            priceDigest: priceDigest,
+            priceTimestamp: priceTimestamp
+        });
+        nextNonce++;
+
+        emit ActionSubmitted(actionId, context.actor, context.role, status);
+        if (status == DecisionStatus.APPROVED) {
+            emit ActionApproved(actionId, expiresAt, preExposureBps, postExposureBps, priceDigest, priceTimestamp);
+        } else {
+            emit ActionBlocked(actionId, code, preExposureBps, postExposureBps, priceDigest, priceTimestamp);
+        }
+    }
+
     function previewAction(Action calldata action, PriceData[] calldata prices)
         external
         view
         returns (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps)
     {
-        bool assetInAllowed = isAssetAllowed[action.assetIn];
-        bool assetOutAllowed = isAssetAllowed[action.assetOut];
-        bool adapterAllowed = isAdapterAllowed[action.adapter];
-
-        EvalInput memory input;
-        input.action = action;
-        input.assetInAllowed = assetInAllowed;
-        input.assetOutAllowed = assetOutAllowed;
-        input.adapterAllowed = adapterAllowed;
-        input.mandate = mandate;
-        input.dailyTurnoverUsedUSDG = dailyTurnoverUsedUSDG;
-        input.lastTradeTimestamp = lastTradeTimestamp;
-        input.nowTimestamp = uint64(block.timestamp);
-
-        if (assetInAllowed && assetOutAllowed && adapterAllowed) {
-            (input.assets, input.balances, input.pricesUSDG1e18) = _valuationRows(action, prices);
-        }
-
-        return permissionEngine.evaluate(input);
+        uint64 priceTimestamp;
+        (code, preExposureBps, postExposureBps, priceTimestamp) = _evaluateAction(action, prices);
     }
 
     function getMandate() external view returns (MandateConfig memory) {
@@ -184,10 +254,41 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         return allowedAssetsList;
     }
 
+    function _evaluateAction(Action calldata action, PriceData[] calldata prices)
+        private
+        view
+        returns (ReasonCode code, uint16 preExposureBps, uint16 postExposureBps, uint64 priceTimestamp)
+    {
+        bool assetInAllowed = isAssetAllowed[action.assetIn];
+        bool assetOutAllowed = isAssetAllowed[action.assetOut];
+        bool adapterAllowed = isAdapterAllowed[action.adapter];
+
+        EvalInput memory input;
+        input.action = action;
+        input.assetInAllowed = assetInAllowed;
+        input.assetOutAllowed = assetOutAllowed;
+        input.adapterAllowed = adapterAllowed;
+        input.mandate = mandate;
+        input.dailyTurnoverUsedUSDG = dailyTurnoverUsedUSDG;
+        input.lastTradeTimestamp = lastTradeTimestamp;
+        input.nowTimestamp = uint64(block.timestamp);
+
+        if (assetInAllowed && assetOutAllowed && adapterAllowed) {
+            (input.assets, input.balances, input.pricesUSDG1e18, priceTimestamp) = _valuationRows(action, prices);
+        }
+
+        (code, preExposureBps, postExposureBps) = permissionEngine.evaluate(input);
+    }
+
     function _valuationRows(Action calldata action, PriceData[] calldata prices)
         private
         view
-        returns (address[] memory assets, uint256[] memory balances, uint256[] memory pricesUSDG1e18)
+        returns (
+            address[] memory assets,
+            uint256[] memory balances,
+            uint256[] memory pricesUSDG1e18,
+            uint64 priceTimestamp
+        )
     {
         address[] memory candidates = new address[](allowedAssetsList.length + 2);
         uint256 candidateCount;
@@ -207,12 +308,17 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         balances = new uint256[](candidateCount);
         pricesUSDG1e18 = new uint256[](candidateCount);
 
+        uint64 minTimestamp = type(uint64).max;
         for (uint256 i; i < candidateCount; ++i) {
             address asset = candidates[i];
+            uint64 rowTimestamp;
             assets[i] = asset;
             balances[i] = IERC20(asset).balanceOf(address(this));
-            pricesUSDG1e18[i] = _priceForAsset(asset, prices);
+            (pricesUSDG1e18[i], rowTimestamp) = _priceForAsset(asset, prices);
+            if (rowTimestamp < minTimestamp) minTimestamp = rowTimestamp;
         }
+
+        if (candidateCount != 0) priceTimestamp = minTimestamp;
     }
 
     function _appendUniqueAsset(address[] memory assets, uint256 assetCount, address asset)
@@ -242,15 +348,30 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         }
     }
 
-    function _priceForAsset(address asset, PriceData[] calldata prices) private view returns (uint256 priceUSDG1e18) {
+    function _priceForAsset(address asset, PriceData[] calldata prices)
+        private
+        view
+        returns (uint256 priceUSDG1e18, uint64 timestamp)
+    {
         for (uint256 i; i < prices.length; ++i) {
             if (prices[i].asset == asset) {
-                (priceUSDG1e18,) = priceOracle.getPrice(asset, prices[i], address(this));
-                return priceUSDG1e18;
+                return priceOracle.getPrice(asset, prices[i], address(this));
             }
         }
 
         revert MissingPrice(asset);
+    }
+
+    function _actionDomainSeparator(uint16 actionSchemaVersion) private view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                ACTION_DOMAIN_TYPEHASH,
+                keccak256(bytes(ACTION_DOMAIN_NAME)),
+                keccak256(bytes(Strings.toString(uint256(actionSchemaVersion)))),
+                block.chainid,
+                address(this)
+            )
+        );
     }
 
     function _removeAllowedAsset(address asset) internal {
