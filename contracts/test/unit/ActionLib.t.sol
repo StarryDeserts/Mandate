@@ -15,54 +15,66 @@ contract ActionLibTest is Test {
     bytes32 private constant DOMAIN_TYPEHASH =
         keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
     string private constant NAME = "MandateAction";
+    bytes32 private constant EXPECTED_DEFAULT_DOMAIN_SEPARATOR =
+        0x911ef18b22cabef5f3810ba24cf7337c2f51496248af45d04bbb07387817b68d;
+    bytes32 private constant EXPECTED_DEFAULT_STRUCT_HASH =
+        0xd6e73cbbd4b4db7e188ef75f0cc19ac1e0dbac55b3820f7add24e9b212a6a549;
+    bytes32 private constant EXPECTED_DEFAULT_ACTION_ID =
+        0xdc684f6d3d8a8fcb534f0c1b7384d2707d4cb505ca675daf6f4f918364a3aaec;
+
+    function test_actionId_matches_hardcoded_canonical_vector() public pure {
+        Action memory action = _defaultAction();
+        bytes32 domainSeparator = _domainSeparator(action.actionSchemaVersion, 1, action.account);
+
+        assertEq(domainSeparator, EXPECTED_DEFAULT_DOMAIN_SEPARATOR, "domain separator");
+        assertEq(_structHash(action), EXPECTED_DEFAULT_STRUCT_HASH, "struct hash");
+        assertEq(ActionLib.hashAction(action, domainSeparator), EXPECTED_DEFAULT_ACTION_ID, "action id");
+    }
 
     function test_actionId_changes_on_every_field_mutation() public pure {
         Action memory action = _defaultAction();
-        bytes32 baseline = _hash(action, 1);
+        bytes32 domainSeparator = _domainSeparator(action.actionSchemaVersion, 1, action.account);
+        bytes32 baseline = ActionLib.hashAction(action, domainSeparator);
 
         Action memory actionSchemaVersionMutated = _defaultAction();
         actionSchemaVersionMutated.actionSchemaVersion = 2;
-        assertTrue(_hash(actionSchemaVersionMutated, 1) != baseline, "actionSchemaVersion mutation");
+        _assertHashDiffers(actionSchemaVersionMutated, domainSeparator, baseline, "actionSchemaVersion mutation");
 
         Action memory accountMutated = _defaultAction();
         accountMutated.account = address(0xA11CE2);
-        assertTrue(_hash(accountMutated, 1) != baseline, "account mutation");
+        _assertHashDiffers(accountMutated, domainSeparator, baseline, "account mutation");
 
         Action memory nonceMutated = _defaultAction();
         nonceMutated.nonce = 43;
-        assertTrue(_hash(nonceMutated, 1) != baseline, "nonce mutation");
-
-        Action memory actionTypeMutated = _defaultAction();
-        _setActionTypeRaw(actionTypeMutated, 1);
-        assertTrue(_hash(actionTypeMutated, 1) != baseline, "actionType mutation");
+        _assertHashDiffers(nonceMutated, domainSeparator, baseline, "nonce mutation");
 
         Action memory assetInMutated = _defaultAction();
         assetInMutated.assetIn = address(0x1112);
-        assertTrue(_hash(assetInMutated, 1) != baseline, "assetIn mutation");
+        _assertHashDiffers(assetInMutated, domainSeparator, baseline, "assetIn mutation");
 
         Action memory amountInMutated = _defaultAction();
         amountInMutated.amountIn = 1001 ether;
-        assertTrue(_hash(amountInMutated, 1) != baseline, "amountIn mutation");
+        _assertHashDiffers(amountInMutated, domainSeparator, baseline, "amountIn mutation");
 
         Action memory assetOutMutated = _defaultAction();
         assetOutMutated.assetOut = address(0x2223);
-        assertTrue(_hash(assetOutMutated, 1) != baseline, "assetOut mutation");
+        _assertHashDiffers(assetOutMutated, domainSeparator, baseline, "assetOut mutation");
 
         Action memory minAmountOutMutated = _defaultAction();
         minAmountOutMutated.minAmountOut = 901 ether;
-        assertTrue(_hash(minAmountOutMutated, 1) != baseline, "minAmountOut mutation");
+        _assertHashDiffers(minAmountOutMutated, domainSeparator, baseline, "minAmountOut mutation");
 
         Action memory adapterMutated = _defaultAction();
         adapterMutated.adapter = address(0x3334);
-        assertTrue(_hash(adapterMutated, 1) != baseline, "adapter mutation");
+        _assertHashDiffers(adapterMutated, domainSeparator, baseline, "adapter mutation");
 
         Action memory recipientMutated = _defaultAction();
         recipientMutated.recipient = address(0x4445);
-        assertTrue(_hash(recipientMutated, 1) != baseline, "recipient mutation");
+        _assertHashDiffers(recipientMutated, domainSeparator, baseline, "recipient mutation");
 
         Action memory deadlineMutated = _defaultAction();
         deadlineMutated.deadline = 1_800_000_001;
-        assertTrue(_hash(deadlineMutated, 1) != baseline, "deadline mutation");
+        _assertHashDiffers(deadlineMutated, domainSeparator, baseline, "deadline mutation");
     }
 
     function test_actionId_stable_for_same_input() public pure {
@@ -111,7 +123,11 @@ contract ActionLibTest is Test {
     }
 
     function _manualHashAction(Action memory action, bytes32 domainSeparator) private pure returns (bytes32) {
-        bytes32 structHash = keccak256(
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, _structHash(action)));
+    }
+
+    function _structHash(Action memory action) private pure returns (bytes32) {
+        return keccak256(
             abi.encode(
                 ACTION_TYPEHASH,
                 action.actionSchemaVersion,
@@ -127,8 +143,6 @@ contract ActionLibTest is Test {
                 action.deadline
             )
         );
-
-        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
     }
 
     function _domainSeparator(uint16 actionSchemaVersion, uint256 chainId, address verifyingContract)
@@ -147,9 +161,10 @@ contract ActionLibTest is Test {
         );
     }
 
-    function _setActionTypeRaw(Action memory action, uint8 rawActionType) private pure {
-        assembly {
-            mstore(add(action, 0x60), rawActionType)
-        }
+    function _assertHashDiffers(Action memory action, bytes32 domainSeparator, bytes32 baseline, string memory label)
+        private
+        pure
+    {
+        assertTrue(ActionLib.hashAction(action, domainSeparator) != baseline, label);
     }
 }

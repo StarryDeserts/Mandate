@@ -9,18 +9,13 @@ library ActionLib {
     );
 
     function hashAction(Action memory action, bytes32 domainSeparator) internal pure returns (bytes32) {
-        uint8 actionType;
-        assembly {
-            actionType := mload(add(action, 0x60))
-        }
-
         bytes32 structHash = keccak256(
             abi.encode(
                 ACTION_TYPEHASH,
                 action.actionSchemaVersion,
                 action.account,
                 action.nonce,
-                actionType,
+                action.actionType,
                 action.assetIn,
                 action.amountIn,
                 action.assetOut,
