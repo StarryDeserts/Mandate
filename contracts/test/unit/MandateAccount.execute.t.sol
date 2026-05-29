@@ -7,6 +7,7 @@ import {Vm} from "forge-std/Vm.sol";
 
 import {ApprovedSwapAdapter} from "../../src/adapters/ApprovedSwapAdapter.sol";
 import {MandateAccount} from "../../src/MandateAccount.sol";
+import {IAdapter} from "../../src/interfaces/IAdapter.sol";
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
 import {MockAMM} from "../../src/mocks/MockAMM.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
@@ -20,6 +21,7 @@ import {
     MandateVersionChanged,
     NotApproved,
     NotAuthorized,
+    PostCheckFailed,
     PriceStaleOnExecute,
     RecipientNotAllowed,
     ReValidationFailed,
@@ -49,6 +51,41 @@ contract ExecutePriceOracle is IPriceOracle {
 
     function signer() external pure returns (address) {
         return PRICE_SIGNER;
+    }
+}
+
+contract FakeAmountOutAdapter is IAdapter {
+    function swap(address assetIn, uint256 amountIn, address, uint256 minAmountOut, address)
+        external
+        returns (uint256 amountOut)
+    {
+        IERC20(assetIn).transferFrom(msg.sender, address(this), amountIn);
+        return minAmountOut;
+    }
+
+    function quote(address, uint256, address) external pure returns (uint256 amountOut) {
+        return 0;
+    }
+}
+
+contract SameTokenMisreportingAdapter is IAdapter {
+    uint256 private immutable actualAmountOut;
+
+    constructor(uint256 actualAmountOut_) {
+        actualAmountOut = actualAmountOut_;
+    }
+
+    function swap(address assetIn, uint256 amountIn, address assetOut, uint256, address recipient)
+        external
+        returns (uint256 amountOut)
+    {
+        IERC20(assetIn).transferFrom(msg.sender, address(this), amountIn);
+        IERC20(assetOut).transfer(recipient, actualAmountOut);
+        return 0;
+    }
+
+    function quote(address, uint256, address) external view returns (uint256 amountOut) {
+        return actualAmountOut;
     }
 }
 
@@ -251,6 +288,81 @@ contract MandateAccountExecuteTest is Test {
         vm.expectRevert(abi.encodeWithSelector(ReValidationFailed.selector, ReasonCode.DAILY_TURNOVER_EXCEEDED));
         vm.prank(OWNER);
         account.executeAction(secondAction, _freshPrices());
+    }
+
+    function test_executeResetsDailyTurnoverForRevalidationAfterUtcDayBoundary() public {
+        uint64 approvalTime = uint64(1 days - 5 minutes);
+        vm.warp(approvalTime);
+        vm.prank(OWNER);
+        account.setMandate(
+            MandateConfig({
+                mandateVersion: 0,
+                maxSingleAssetExposureBps: 3_500,
+                maxTradeSizeUSDG: 1_000 ether,
+                maxDailyTurnoverBps: 1_000,
+                cooldownSeconds: 0
+            })
+        );
+
+        Action memory firstAction = _buyTslaAction(100 ether, 0);
+        Action memory secondAction = _buyTslaAction(100 ether, 1);
+        firstAction.deadline = approvalTime + account.APPROVAL_TTL();
+        secondAction.deadline = firstAction.deadline;
+        _approveAction(firstAction);
+        _approveAction(secondAction);
+
+        vm.prank(OWNER);
+        account.executeAction(firstAction, _freshPrices());
+        assertEq(account.dailyTurnoverUsedUSDG(), 100 ether);
+        assertEq(account.turnoverDay(), uint64(approvalTime / 1 days));
+
+        vm.warp(1 days + 1 minutes);
+        vm.prank(OWNER);
+        uint256 amountOut = account.executeAction(secondAction, _freshPrices());
+
+        assertEq(amountOut, 50 ether);
+        assertEq(account.dailyTurnoverUsedUSDG(), 100 ether);
+        assertEq(account.turnoverDay(), uint64(block.timestamp / 1 days));
+    }
+
+    function test_executeRevertsWhenAdapterReturnsFakeAmountOutWithoutTransferringOutput() public {
+        FakeAmountOutAdapter fakeAdapter = new FakeAmountOutAdapter();
+        vm.prank(OWNER);
+        account.setAdapterAllowed(address(fakeAdapter), true);
+        Action memory action = _buyTslaAction(100 ether, 0);
+        action.adapter = address(fakeAdapter);
+        _approveAction(action);
+
+        vm.expectRevert(abi.encodeWithSelector(PostCheckFailed.selector, action.minAmountOut, 0));
+        vm.prank(OWNER);
+        account.executeAction(action, _freshPrices());
+    }
+
+    function test_executeSameTokenSwapUsesActualReceivedOutputDespiteAdapterReturn() public {
+        SameTokenMisreportingAdapter misreportingAdapter = new SameTokenMisreportingAdapter(8 ether);
+        vm.prank(OWNER);
+        account.setAdapterAllowed(address(misreportingAdapter), true);
+        Action memory action = Action({
+            actionSchemaVersion: 1,
+            account: address(account),
+            nonce: 0,
+            actionType: ActionType.SWAP,
+            assetIn: address(tsla),
+            amountIn: 10 ether,
+            assetOut: address(tsla),
+            minAmountOut: 8 ether,
+            adapter: address(misreportingAdapter),
+            recipient: address(account),
+            deadline: 20_000
+        });
+        _approveAction(action);
+
+        vm.prank(OWNER);
+        uint256 amountOut = account.executeAction(action, _freshPrices());
+
+        assertEq(amountOut, 8 ether);
+        assertEq(tsla.balanceOf(address(account)), TSLA_BALANCE - 2 ether);
+        assertEq(tsla.allowance(address(account), address(misreportingAdapter)), 0);
     }
 
     function test_executeApprovesExactAmountThenResetsAllowance() public {

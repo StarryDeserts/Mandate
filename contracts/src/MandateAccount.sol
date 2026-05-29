@@ -362,7 +362,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         input.assets = rows.assets;
         input.balances = rows.balances;
         input.pricesUSDG1e18 = rows.pricesUSDG1e18;
-        input.dailyTurnoverUsedUSDG = dailyTurnoverUsedUSDG;
+        input.dailyTurnoverUsedUSDG = _effectiveDailyTurnoverUsedUSDG();
         input.lastTradeTimestamp = lastTradeTimestamp;
         input.nowTimestamp = uint64(block.timestamp);
 
@@ -371,12 +371,23 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         if (code != ReasonCode.OK) revert ReValidationFailed(code);
     }
 
-    function _swapViaAdapter(Action calldata action) private returns (uint256 amountOut) {
+    function _swapViaAdapter(Action calldata action) private returns (uint256 actualAmountOut) {
         IERC20 tokenIn = IERC20(action.assetIn);
+        IERC20 tokenOut = IERC20(action.assetOut);
+        uint256 balanceBefore = tokenOut.balanceOf(address(this));
+
         tokenIn.forceApprove(action.adapter, action.amountIn);
-        amountOut = IAdapter(action.adapter)
+        IAdapter(action.adapter)
             .swap(action.assetIn, action.amountIn, action.assetOut, action.minAmountOut, address(this));
         tokenIn.forceApprove(action.adapter, 0);
+
+        uint256 balanceAfter = tokenOut.balanceOf(address(this));
+        if (action.assetIn == action.assetOut) {
+            uint256 balanceAfterInput = balanceBefore > action.amountIn ? balanceBefore - action.amountIn : 0;
+            if (balanceAfter > balanceAfterInput) actualAmountOut = balanceAfter - balanceAfterInput;
+        } else if (balanceAfter > balanceBefore) {
+            actualAmountOut = balanceAfter - balanceBefore;
+        }
     }
 
     function _evaluateAction(Action calldata action, PriceData[] calldata prices)
@@ -394,7 +405,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         input.assetOutAllowed = assetOutAllowed;
         input.adapterAllowed = adapterAllowed;
         input.mandate = mandate;
-        input.dailyTurnoverUsedUSDG = dailyTurnoverUsedUSDG;
+        input.dailyTurnoverUsedUSDG = _effectiveDailyTurnoverUsedUSDG();
         input.lastTradeTimestamp = lastTradeTimestamp;
         input.nowTimestamp = uint64(block.timestamp);
 
@@ -527,17 +538,24 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         }
     }
 
-    function _recordExecution(Action calldata action, uint256 assetInPriceUSDG1e18) private {
-        uint64 currentDay = uint64(block.timestamp / 1 days);
-        uint256 usedTurnover = dailyTurnoverUsedUSDG;
-        if (currentDay > turnoverDay) {
-            turnoverDay = currentDay;
-            usedTurnover = 0;
-        }
+    function _effectiveDailyTurnoverUsedUSDG() private view returns (uint256) {
+        if (_currentTurnoverDay() > turnoverDay) return 0;
 
+        return dailyTurnoverUsedUSDG;
+    }
+
+    function _recordExecution(Action calldata action, uint256 assetInPriceUSDG1e18) private {
+        uint64 currentDay = _currentTurnoverDay();
+        uint256 usedTurnover = _effectiveDailyTurnoverUsedUSDG();
         uint256 tradeValueUSDG = Math.mulDiv(action.amountIn, assetInPriceUSDG1e18, USDG_SCALE);
+
+        turnoverDay = currentDay;
         dailyTurnoverUsedUSDG = usedTurnover + tradeValueUSDG;
         lastTradeTimestamp = uint64(block.timestamp);
+    }
+
+    function _currentTurnoverDay() private view returns (uint64) {
+        return uint64(block.timestamp / 1 days);
     }
 
     function _actionDomainSeparator(uint16 actionSchemaVersion) private view returns (bytes32) {
