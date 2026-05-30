@@ -25,6 +25,7 @@ contract DeployScript is Script {
     }
 
     error PriceMaxStalenessTooLarge(uint256 value);
+    error OwnerMustBeDeployer(address owner, address deployer);
 
     address internal constant DEFAULT_PRICE_SIGNER = address(0x00000000000000000000000000000000000051A9);
     uint64 internal constant DEFAULT_PRICE_MAX_STALENESS = 1 hours;
@@ -40,6 +41,7 @@ contract DeployScript is Script {
         if (priceSigner == address(0)) priceSigner = _defaultPriceSigner(owner);
 
         uint64 priceMaxStaleness = _priceMaxStaleness();
+        if (owner != deployer) revert OwnerMustBeDeployer(owner, deployer);
 
         vm.startBroadcast();
 
@@ -55,14 +57,12 @@ contract DeployScript is Script {
         result.priceSigner = priceSigner;
         result.priceMaxStaleness = priceMaxStaleness;
 
-        if (owner == deployer) {
-            result.account.registerPriceOracle(result.priceFeed);
-            result.account.setAdapterAllowed(address(result.adapter), true);
-            result.account.setAssetAllowed(address(result.usdg), true);
-            result.account.setAssetAllowed(address(result.tsla), true);
-            result.account.setAssetAllowed(address(result.amd), true);
-            result.wired = true;
-        }
+        result.account.registerPriceOracle(result.priceFeed);
+        result.account.setAdapterAllowed(address(result.adapter), true);
+        result.account.setAssetAllowed(address(result.usdg), true);
+        result.account.setAssetAllowed(address(result.tsla), true);
+        result.account.setAssetAllowed(address(result.amd), true);
+        result.wired = true;
 
         vm.stopBroadcast();
 
