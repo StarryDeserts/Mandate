@@ -24,7 +24,7 @@ type ServerConfig = {
   port: number;
   priceMap: Map<string, bigint>;
   defaultPriceUSDG1e18: bigint;
-  usdgAddress?: Address;
+  usdgAddress: Address;
 };
 
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -34,8 +34,11 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
   }
 
   const usdgAddress = env.USDG_ADDRESS;
-  if (usdgAddress !== undefined && !isAddress(usdgAddress, { strict: false })) {
-    throw new Error('USDG_ADDRESS must be a valid EVM address when set');
+  if (usdgAddress === undefined || usdgAddress.trim() === '') {
+    throw new Error('USDG_ADDRESS must be set to the USDG token address');
+  }
+  if (!isAddress(usdgAddress, { strict: false })) {
+    throw new Error('USDG_ADDRESS must be a valid EVM address');
   }
 
   const privateKey = normalizePrivateKey(env.PRICE_SIGNER_KEY, 'PRICE_SIGNER_KEY');
@@ -52,7 +55,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
       env.DEFAULT_PRICE_USDG_1E18 ?? DEFAULT_PRICE_USDG_1E18.toString(),
       'DEFAULT_PRICE_USDG_1E18',
     ),
-    usdgAddress: usdgAddress === undefined ? undefined : getAddress(usdgAddress),
+    usdgAddress: getAddress(usdgAddress),
   };
 }
 
@@ -100,7 +103,7 @@ function requestUrl(request: IncomingMessage): URL {
   return new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
 }
 
-function parseAssets(rawAssets: string | null, usdgAddress?: Address): Address[] {
+function parseAssets(rawAssets: string | null, usdgAddress: Address): Address[] {
   if (rawAssets === null || rawAssets.trim() === '') {
     throw new Error('assets query parameter is required');
   }
@@ -113,7 +116,7 @@ function parseAssets(rawAssets: string | null, usdgAddress?: Address): Address[]
       if (!isAddress(asset, { strict: false })) throw new Error(`invalid asset address ${asset}`);
       return getAddress(asset);
     })
-    .filter((asset) => usdgAddress === undefined || asset.toLowerCase() !== usdgAddress.toLowerCase());
+    .filter((asset) => asset.toLowerCase() !== usdgAddress.toLowerCase());
 }
 
 function resolvePrices(assets: Address[], config: ServerConfig): PriceInput[] {
