@@ -92,6 +92,7 @@ contract SameTokenMisreportingAdapter is IAdapter {
 contract MandateAccountExecuteTest is Test {
     bytes32 private constant ACTION_EXECUTED_TOPIC =
         keccak256("ActionExecuted(bytes32,uint256,uint256,uint16,bytes32,uint64)");
+    bytes32 private constant APPROVAL_CANCELLED_TOPIC = keccak256("ApprovalCancelled(bytes32)");
     uint256 private constant USDG_BALANCE = 1_000 ether;
     uint256 private constant TSLA_BALANCE = 100 ether;
     uint256 private constant TSLA_PRICE = 2 ether;
@@ -175,6 +176,58 @@ contract MandateAccountExecuteTest is Test {
         vm.expectRevert(abi.encodeWithSelector(NotApproved.selector, actionId, DecisionStatus.EXECUTED));
         vm.prank(OWNER);
         account.executeAction(action, _freshPrices());
+    }
+
+    function test_cancelApprovedTransitionsApprovedDecisionToCancelledAndEmitsEvent() public {
+        Action memory action = _buyTslaAction(100 ether, 0);
+        bytes32 actionId = _approveAction(action);
+
+        vm.recordLogs();
+        vm.prank(OWNER);
+        account.cancelApproved(actionId);
+
+        _assertDecisionStatus(actionId, DecisionStatus.CANCELLED);
+        _assertApprovalCancelledLog(actionId);
+    }
+
+    function test_cancelApprovedThenExecuteRevertsNotApproved() public {
+        Action memory action = _buyTslaAction(100 ether, 0);
+        bytes32 actionId = _approveAction(action);
+
+        vm.prank(OWNER);
+        account.cancelApproved(actionId);
+
+        vm.expectRevert(abi.encodeWithSelector(NotApproved.selector, actionId, DecisionStatus.CANCELLED));
+        vm.prank(OWNER);
+        account.executeAction(action, _freshPrices());
+    }
+
+    function test_cancelApprovedRevertsForSessionKeyWithRoleBasedError() public {
+        Action memory action = _buyTslaAction(100 ether, 0);
+        bytes32 actionId = _approveAction(action);
+        _addSessionKey(SESSION, true, uint64(block.timestamp + 100));
+
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.SESSION));
+        vm.prank(SESSION);
+        account.cancelApproved(actionId);
+    }
+
+    function test_cancelApprovedRevertsForUnknownCallerWithRoleBasedError() public {
+        Action memory action = _buyTslaAction(100 ether, 0);
+        bytes32 actionId = _approveAction(action);
+
+        vm.expectRevert(abi.encodeWithSelector(NotAuthorized.selector, Role.NONE));
+        vm.prank(STRANGER);
+        account.cancelApproved(actionId);
+    }
+
+    function test_cancelApprovedRevertsWhenDecisionIsNotApproved() public {
+        Action memory action = _buyTslaAction(100 ether, 0);
+        bytes32 actionId = account.computeActionId(action);
+
+        vm.expectRevert(abi.encodeWithSelector(NotApproved.selector, actionId, DecisionStatus.NONE));
+        vm.prank(OWNER);
+        account.cancelApproved(actionId);
     }
 
     function test_executeDifferentActionThanApprovedRevertsNotApprovedForDifferentActionId() public {
@@ -531,5 +584,21 @@ contract MandateAccountExecuteTest is Test {
         }
 
         fail("missing ActionExecuted event");
+    }
+
+    function _assertApprovalCancelledLog(bytes32 actionId) private {
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+
+        for (uint256 i; i < entries.length; ++i) {
+            if (
+                entries[i].emitter == address(account) && entries[i].topics.length == 2
+                    && entries[i].topics[0] == APPROVAL_CANCELLED_TOPIC && entries[i].topics[1] == actionId
+                    && entries[i].data.length == 0
+            ) {
+                return;
+            }
+        }
+
+        fail("missing ApprovalCancelled event");
     }
 }

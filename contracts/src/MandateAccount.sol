@@ -80,6 +80,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         bytes32 priceDigest,
         uint64 priceTimestamp
     );
+    event ApprovalCancelled(bytes32 indexed actionId);
 
     struct ActorContext {
         address actor;
@@ -264,6 +265,19 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         } else {
             emit ActionBlocked(actionId, code, preExposureBps, postExposureBps, priceDigest, priceTimestamp);
         }
+    }
+
+    function cancelApproved(bytes32 actionId) external {
+        Role role = roleOf(msg.sender);
+        if (role != Role.OWNER) revert NotAuthorized(role);
+
+        Decision storage decision = decisions[actionId];
+        DecisionStatus status = decision.status;
+        if (status != DecisionStatus.APPROVED) revert NotApproved(actionId, status);
+
+        decision.status = DecisionStatus.CANCELLED;
+
+        emit ApprovalCancelled(actionId);
     }
 
     function executeAction(Action calldata action, PriceData[] calldata prices)
