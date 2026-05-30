@@ -27,7 +27,7 @@ contract DeployScript is Script {
     error PriceMaxStalenessTooLarge(uint256 value);
     error OwnerMustBeDeployer(address owner, address deployer);
 
-    address internal constant DEFAULT_PRICE_SIGNER = address(0x00000000000000000000000000000000000051A9);
+    address internal constant DEFAULT_PRICE_SIGNER = 0xCEc09D1Aa4f881b79d559AF54fDBF0BD1530E070;
     uint64 internal constant DEFAULT_PRICE_MAX_STALENESS = 1 hours;
 
     Deployments public deployments;
