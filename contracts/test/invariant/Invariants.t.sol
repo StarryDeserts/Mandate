@@ -18,6 +18,7 @@ import {
     MandateVersionChanged,
     MissingPrice,
     NotApproved,
+    PriceStaleOnExecute,
     PriceUnverified,
     RecipientNotAllowed,
     ReservedSessionKeyScope,
@@ -608,6 +609,83 @@ contract MandateAccountInvariantsTest is Test {
         assertEq(priceTimestamp, 0);
     }
 
+    function test_invariantExecutePriceDisciplineRejectsMalformedPricesAndKeepsDecisionApproved() public {
+        Action memory missingPriceAction = _buyTslaAction(100 ether, account.nextNonce());
+        bytes32 missingPriceActionId = _approveAction(missingPriceAction);
+        _assertExecuteRevertKeepsApproved(
+            missingPriceAction,
+            missingPriceActionId,
+            new PriceData[](0),
+            abi.encodeWithSelector(MissingPrice.selector, address(tsla))
+        );
+
+        Action memory unsortedPriceAction = _buyTslaAction(100 ether, account.nextNonce());
+        bytes32 unsortedPriceActionId = _approveAction(unsortedPriceAction);
+        PriceData[] memory unsortedPrices = _unsortedNonUSDGPrices();
+        _assertExecuteRevertKeepsApproved(
+            unsortedPriceAction,
+            unsortedPriceActionId,
+            unsortedPrices,
+            abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, unsortedPrices[1].asset)
+        );
+
+        Action memory duplicatePriceAction = _buyTslaAction(100 ether, account.nextNonce());
+        bytes32 duplicatePriceActionId = _approveAction(duplicatePriceAction);
+        _assertExecuteRevertKeepsApproved(
+            duplicatePriceAction,
+            duplicatePriceActionId,
+            _duplicateTslaPrices(),
+            abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, address(tsla))
+        );
+
+        Action memory usdgPriceAction = _buyTslaAction(100 ether, account.nextNonce());
+        bytes32 usdgPriceActionId = _approveAction(usdgPriceAction);
+        PriceData[] memory usdgPrices = new PriceData[](1);
+        usdgPrices[0] = _priceData(address(usdg), 1 ether, uint64(block.timestamp), uint64(block.timestamp + 1 hours));
+        _assertExecuteRevertKeepsApproved(
+            usdgPriceAction,
+            usdgPriceActionId,
+            usdgPrices,
+            abi.encodeWithSelector(UnsortedOrDuplicateAsset.selector, address(usdg))
+        );
+
+        Action memory stalePriceAction = _buyTslaAction(100 ether, account.nextNonce());
+        bytes32 stalePriceActionId = _approveAction(stalePriceAction);
+        uint64 staleTimestamp = uint64(block.timestamp - 1 hours - 1);
+        PriceData[] memory stalePrices = new PriceData[](1);
+        stalePrices[0] = _priceData(address(tsla), TSLA_PRICE, staleTimestamp, uint64(block.timestamp + 1 hours));
+        _assertExecuteRevertKeepsApproved(
+            stalePriceAction,
+            stalePriceActionId,
+            stalePrices,
+            abi.encodeWithSelector(PriceStaleOnExecute.selector, address(tsla), staleTimestamp)
+        );
+
+        SignedDemoPriceFeed signedFeed = new SignedDemoPriceFeed(vm.addr(PRICE_SIGNER_KEY), 1 hours);
+        vm.prank(OWNER);
+        account.registerPriceOracle(signedFeed);
+
+        Action memory unsignedPriceAction = _buyTslaAction(100 ether, account.nextNonce());
+        bytes32 unsignedPriceActionId =
+            _approveActionWithPrices(unsignedPriceAction, _signedTslaPrices(signedFeed, PRICE_SIGNER_KEY));
+        _assertExecuteRevertKeepsApproved(
+            unsignedPriceAction,
+            unsignedPriceActionId,
+            _freshPrices(),
+            abi.encodeWithSelector(PriceUnverified.selector, address(tsla))
+        );
+
+        Action memory wrongSignerPriceAction = _buyTslaAction(100 ether, account.nextNonce());
+        bytes32 wrongSignerPriceActionId =
+            _approveActionWithPrices(wrongSignerPriceAction, _signedTslaPrices(signedFeed, PRICE_SIGNER_KEY));
+        _assertExecuteRevertKeepsApproved(
+            wrongSignerPriceAction,
+            wrongSignerPriceActionId,
+            _signedTslaPrices(signedFeed, WRONG_PRICE_SIGNER_KEY),
+            abi.encodeWithSelector(PriceUnverified.selector, address(tsla))
+        );
+    }
+
     function test_invariantRecipientLockRejectsExternalRecipient() public {
         Action memory action = _buyTslaAction(100 ether, account.nextNonce());
         action.recipient = ATTACKER;
@@ -703,7 +781,13 @@ contract MandateAccountInvariantsTest is Test {
     }
 
     function _approveAction(Action memory action) private returns (bytes32 actionId) {
-        PriceData[] memory prices = _freshPrices();
+        actionId = _approveActionWithPrices(action, _freshPrices());
+    }
+
+    function _approveActionWithPrices(Action memory action, PriceData[] memory prices)
+        private
+        returns (bytes32 actionId)
+    {
         actionId = account.computeActionId(action);
 
         vm.prank(OWNER);
@@ -712,6 +796,19 @@ contract MandateAccountInvariantsTest is Test {
         assertEq(returnedActionId, actionId);
         assertEq(uint8(code), uint8(ReasonCode.OK));
         _assertDecisionStatus(actionId, DecisionStatus.APPROVED);
+    }
+
+    function _assertExecuteRevertKeepsApproved(
+        Action memory action,
+        bytes32 actionId,
+        PriceData[] memory prices,
+        bytes memory expectedRevert
+    ) private {
+        vm.expectRevert(expectedRevert);
+        vm.prank(OWNER);
+        account.executeAction(action, prices);
+
+        _assertDecisionApprovedNotExecuted(actionId);
     }
 
     function _buyTslaAction(uint256 amountIn, uint256 nonce) private view returns (Action memory action) {
@@ -750,6 +847,22 @@ contract MandateAccountInvariantsTest is Test {
         prices = new PriceData[](1);
         prices[0] =
             _priceData(address(tsla), TSLA_PRICE, uint64(block.timestamp - 100), uint64(block.timestamp + 1 hours));
+    }
+
+    function _signedTslaPrices(SignedDemoPriceFeed signedFeed, uint256 signingKey)
+        private
+        view
+        returns (PriceData[] memory prices)
+    {
+        prices = new PriceData[](1);
+        prices[0] = _signedPriceData(
+            signedFeed,
+            signingKey,
+            address(tsla),
+            TSLA_PRICE,
+            uint64(block.timestamp),
+            uint64(block.timestamp + 1 hours)
+        );
     }
 
     function _duplicateTslaPrices() private view returns (PriceData[] memory prices) {
@@ -870,5 +983,12 @@ contract MandateAccountInvariantsTest is Test {
         (DecisionStatus status,,,,,) = account.decisions(actionId);
 
         assertEq(uint8(status), uint8(expectedStatus));
+    }
+
+    function _assertDecisionApprovedNotExecuted(bytes32 actionId) private view {
+        (DecisionStatus status,,,,,) = account.decisions(actionId);
+
+        assertEq(uint8(status), uint8(DecisionStatus.APPROVED));
+        assertTrue(status != DecisionStatus.EXECUTED);
     }
 }
