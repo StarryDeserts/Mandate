@@ -15,6 +15,7 @@ import {
 
 const DEFAULT_PRICE_USDG_1E18 = 1_000_000_000_000_000_000n;
 const DEFAULT_PORT = 8_787;
+const DEFAULT_HOST = '127.0.0.1';
 
 type ServerConfig = {
   privateKey: string;
@@ -22,6 +23,7 @@ type ServerConfig = {
   chainId: number;
   validitySeconds: number;
   port: number;
+  host: string;
   priceMap: Map<string, bigint>;
   defaultPriceUSDG1e18: bigint;
   usdgAddress: Address;
@@ -50,6 +52,7 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
     chainId: parsePositiveInteger(env.CHAIN_ID ?? String(DEFAULT_CHAIN_ID), 'CHAIN_ID'),
     validitySeconds: parsePositiveInteger(env.PRICE_TTL_SECONDS ?? String(DEFAULT_VALIDITY_SECONDS), 'PRICE_TTL_SECONDS'),
     port: parsePositiveInteger(env.PORT ?? String(DEFAULT_PORT), 'PORT'),
+    host: parseHost(env.SIGNER_HOST ?? DEFAULT_HOST, 'SIGNER_HOST'),
     priceMap: loadPriceMap(env),
     defaultPriceUSDG1e18: parseUnsignedBigInt(
       env.DEFAULT_PRICE_USDG_1E18 ?? DEFAULT_PRICE_USDG_1E18.toString(),
@@ -93,8 +96,8 @@ export function createPriceServer(config: ServerConfig) {
 
 export function startServer(config = loadServerConfig()) {
   const server = createPriceServer(config);
-  server.listen(config.port, () => {
-    console.log(`Mandate demo price signer listening on http://127.0.0.1:${config.port}`);
+  server.listen(config.port, config.host, () => {
+    console.log(`Mandate demo price signer listening on http://${config.host}:${config.port}`);
   });
   return server;
 }
@@ -133,7 +136,10 @@ function loadPriceMap(env: NodeJS.ProcessEnv): Map<string, bigint> {
     const parsed = JSON.parse(env.PRICE_MAP_JSON) as Record<string, unknown>;
     for (const [asset, value] of Object.entries(parsed)) {
       if (!isAddress(asset, { strict: false })) throw new Error(`PRICE_MAP_JSON contains invalid address ${asset}`);
-      priceMap.set(getAddress(asset).toLowerCase(), parseUnsignedBigInt(String(value), `PRICE_MAP_JSON[${asset}]`));
+      if (typeof value !== 'string') {
+        throw new Error(`PRICE_MAP_JSON[${asset}] must be an unsigned decimal integer string`);
+      }
+      priceMap.set(getAddress(asset).toLowerCase(), parseUnsignedBigInt(value, `PRICE_MAP_JSON[${asset}]`));
     }
   }
 
@@ -153,6 +159,12 @@ function parsePositiveInteger(value: string, label: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${label} must be a positive safe integer`);
   return parsed;
+}
+
+function parseHost(value: string, label: string): string {
+  const host = value.trim();
+  if (host === '') throw new Error(`${label} must be a non-empty host`);
+  return host;
 }
 
 function parseUnsignedBigInt(value: string, label: string): bigint {
