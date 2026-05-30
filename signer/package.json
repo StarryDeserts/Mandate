@@ -1,0 +1,21 @@
+{
+  "name": "@mandate/price-signer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Demo-grade EIP-712 price signer for Mandate SignedDemoPriceFeed.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "tsx src/server.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "viem": "^2.31.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.2"
+  }
+}
