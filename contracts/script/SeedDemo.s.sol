@@ -32,7 +32,6 @@ contract SeedDemoScript is Script {
         SignedDemoPriceFeed priceFeed;
         address sessionKey;
         uint256 priceSignerPk;
-        bool hasAmd;
         bool localDeployment;
     }
 
@@ -46,6 +45,7 @@ contract SeedDemoScript is Script {
 
     uint256 private constant USDG_BALANCE = 1_000 ether;
     uint256 private constant TSLA_BALANCE = 235 ether;
+    uint256 private constant AMD_BALANCE = 11 ether;
     uint256 private constant AMM_TSLA_LIQUIDITY = 10_000 ether;
     uint256 private constant TSLA_PRICE = 2 ether;
     uint256 private constant AMD_PRICE = 1 ether;
@@ -66,6 +66,7 @@ contract SeedDemoScript is Script {
     error AccountBalanceAboveTarget(address token, uint256 current, uint256 target);
     error InvalidPrivateKey();
     error PriceSignerPrivateKeyMismatch(address expectedSigner, address actualSigner);
+    error PriceSignerMustBeIndependent(address priceSigner, address owner, address broadcaster);
     error TimestampTooLarge(uint256 timestamp);
     error UnexpectedDangerousPreview(ReasonCode actual, uint16 postExposureBps);
     error NoSafeAmountFound();
@@ -89,7 +90,7 @@ contract SeedDemoScript is Script {
         }
 
         _assertOwnerCanSeed(demo.account, broadcaster);
-        _assertPriceSignerKey(demo.priceFeed, demo.priceSignerPk);
+        _assertPriceSignerKey(demo.priceFeed, demo.priceSignerPk, demo.account.owner(), broadcaster);
         _assertAdapterWiresAmm(demo.adapter, demo.amm);
         _logAddresses(demo);
 
@@ -123,11 +124,7 @@ contract SeedDemoScript is Script {
         console2.log("SeedDemo dangerous reason", uint256(dangerousCode));
         console2.log("SeedDemo dangerous post TSLA exposure bps", uint256(dangerousPostExposureBps));
 
-        if (!_hasNonzeroAmdBalance(demo)) {
-            _assertPreExposureNearDemo(preExposureBps);
-        } else {
-            console2.log("SeedDemo AMD balance is nonzero; exact pre exposure logged", uint256(preExposureBps));
-        }
+        _assertPreExposureNearDemo(preExposureBps);
         if (dangerousCode != ReasonCode.SINGLE_ASSET_EXPOSURE_EXCEEDED) {
             revert UnexpectedDangerousPreview(dangerousCode, dangerousPostExposureBps);
         }
@@ -207,7 +204,6 @@ contract SeedDemoScript is Script {
 
         demo.sessionKey = sessionKey;
         demo.priceSignerPk = priceSignerPk;
-        demo.hasAmd = true;
         demo.localDeployment = true;
     }
 
@@ -218,6 +214,7 @@ contract SeedDemoScript is Script {
     {
         if (env.usdg == address(0)) revert MissingEnvAddress("USDG");
         if (env.tsla == address(0)) revert MissingEnvAddress("TSLA");
+        if (env.amd == address(0)) revert MissingEnvAddress("AMD");
         if (env.amm == address(0)) revert MissingEnvAddress("AMM");
         if (env.adapter == address(0)) revert MissingEnvAddress("ADAPTER");
         if (env.priceFeed == address(0)) revert MissingEnvAddress("PRICE_FEED");
@@ -231,7 +228,6 @@ contract SeedDemoScript is Script {
         demo.priceFeed = SignedDemoPriceFeed(env.priceFeed);
         demo.sessionKey = sessionKey;
         demo.priceSignerPk = priceSignerPk;
-        demo.hasAmd = env.amd != address(0);
         demo.localDeployment = false;
     }
 
@@ -242,10 +238,18 @@ contract SeedDemoScript is Script {
         if (actualOwner != broadcaster) revert OwnerMustBeBroadcaster(actualOwner, broadcaster);
     }
 
-    function _assertPriceSignerKey(SignedDemoPriceFeed priceFeed, uint256 priceSignerPk) private view {
+    function _assertPriceSignerKey(
+        SignedDemoPriceFeed priceFeed,
+        uint256 priceSignerPk,
+        address owner,
+        address broadcaster
+    ) private view {
         address actualSigner = vm.addr(priceSignerPk);
         address expectedSigner = priceFeed.signer();
         if (actualSigner != expectedSigner) revert PriceSignerPrivateKeyMismatch(expectedSigner, actualSigner);
+        if (actualSigner == owner || actualSigner == broadcaster) {
+            revert PriceSignerMustBeIndependent(actualSigner, owner, broadcaster);
+        }
     }
 
     function _assertAdapterWiresAmm(ApprovedSwapAdapter adapter, MockAMM amm) private view {
@@ -257,11 +261,12 @@ contract SeedDemoScript is Script {
     function _seedBalances(DemoContracts memory demo) private {
         _seedAccountBalance(demo.usdg, demo.account, USDG_BALANCE);
         _seedAccountBalance(demo.tsla, demo.account, TSLA_BALANCE);
+        _seedAccountBalance(demo.amd, demo.account, AMD_BALANCE);
         _seedMinimumAmmLiquidity(demo.tsla, demo.amm, AMM_TSLA_LIQUIDITY);
 
         console2.log("SeedDemo account USDG balance", demo.usdg.balanceOf(address(demo.account)));
         console2.log("SeedDemo account TSLA balance", demo.tsla.balanceOf(address(demo.account)));
-        if (demo.hasAmd) console2.log("SeedDemo account AMD balance", demo.amd.balanceOf(address(demo.account)));
+        console2.log("SeedDemo account AMD balance", demo.amd.balanceOf(address(demo.account)));
         console2.log("SeedDemo AMM TSLA liquidity", demo.tsla.balanceOf(address(demo.amm)));
     }
 
@@ -304,7 +309,7 @@ contract SeedDemoScript is Script {
         demo.account.registerPriceOracle(demo.priceFeed);
         demo.account.setAssetAllowed(address(demo.usdg), true);
         demo.account.setAssetAllowed(address(demo.tsla), true);
-        if (demo.hasAmd) demo.account.setAssetAllowed(address(demo.amd), true);
+        demo.account.setAssetAllowed(address(demo.amd), true);
         demo.account.addSessionKey(demo.sessionKey, _sessionKey(_futureTimestamp(SESSION_TTL)));
 
         console2.log("SeedDemo mandate max exposure bps", uint256(MAX_TSLA_EXPOSURE_BPS));
@@ -321,23 +326,22 @@ contract SeedDemoScript is Script {
     }
 
     function _freshPrices(DemoContracts memory demo) private view returns (PriceData[] memory prices) {
-        bool includeAmd = _hasNonzeroAmdBalance(demo);
-        prices = new PriceData[](includeAmd ? 2 : 1);
+        prices = new PriceData[](2);
 
         uint64 timestamp = _currentTimestamp();
         uint64 validUntil = _futureTimestamp(1 hours);
 
-        if (includeAmd && address(demo.amd) < address(demo.tsla)) {
+        if (address(demo.amd) < address(demo.tsla)) {
             prices[0] = _signedPriceData(demo, address(demo.amd), AMD_PRICE, timestamp, validUntil);
             prices[1] = _signedPriceData(demo, address(demo.tsla), TSLA_PRICE, timestamp, validUntil);
         } else {
             prices[0] = _signedPriceData(demo, address(demo.tsla), TSLA_PRICE, timestamp, validUntil);
-            if (includeAmd) prices[1] = _signedPriceData(demo, address(demo.amd), AMD_PRICE, timestamp, validUntil);
+            prices[1] = _signedPriceData(demo, address(demo.amd), AMD_PRICE, timestamp, validUntil);
         }
 
         console2.log("SeedDemo price rows", prices.length);
         console2.log("SeedDemo TSLA price USDG", TSLA_PRICE);
-        if (includeAmd) console2.log("SeedDemo AMD price USDG", AMD_PRICE);
+        console2.log("SeedDemo AMD price USDG", AMD_PRICE);
     }
 
     function _signedPriceData(
@@ -407,10 +411,6 @@ contract SeedDemoScript is Script {
         });
     }
 
-    function _hasNonzeroAmdBalance(DemoContracts memory demo) private view returns (bool) {
-        return demo.hasAmd && demo.amd.balanceOf(address(demo.account)) != 0;
-    }
-
     function _assertPreExposureNearDemo(uint16 preExposureBps) private pure {
         if (preExposureBps < 3_100 || preExposureBps > 3_300) revert PreExposureNotNearDemo(preExposureBps);
     }
@@ -445,7 +445,7 @@ contract SeedDemoScript is Script {
         console2.log("SeedDemo owner", demo.account.owner());
         console2.log("SeedDemo USDG", address(demo.usdg));
         console2.log("SeedDemo TSLA", address(demo.tsla));
-        if (demo.hasAmd) console2.log("SeedDemo AMD", address(demo.amd));
+        console2.log("SeedDemo AMD", address(demo.amd));
         console2.log("SeedDemo MockAMM", address(demo.amm));
         console2.log("SeedDemo ApprovedSwapAdapter", address(demo.adapter));
         console2.log("SeedDemo SignedDemoPriceFeed", address(demo.priceFeed));
