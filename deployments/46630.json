@@ -1,0 +1,39 @@
+{
+  "chainId": 46630,
+  "network": "robinhood-testnet",
+  "deploymentMethod": "split-forge-create",
+  "status": "deployed-unseeded",
+  "deployer": "0x4727165918986b69ff3F94aC1dAa94987B819cfD",
+  "owner": "0x4727165918986b69ff3F94aC1dAa94987B819cfD",
+  "priceSigner": "0xCEc09D1Aa4f881b79d559AF54fDBF0BD1530E070",
+  "contracts": {
+    "usdg": "0x2FF2BF302F81F06a998195c35aEdAA48244289Dd",
+    "tsla": "0xfFE0BdcEf7c05f1E4d7c089FE7c74E937B404d00",
+    "amd": "0x954b04758d4133a700F85fAF430663B1F7bd92f1",
+    "amm": "0xb7505D0fa3001044A650005b6206A14dB3FE7Bb4",
+    "adapter": "0x702C8f073F3a4aC7b140e3434d202107068dB772",
+    "priceFeed": "0x33fC3181cf0eefa6C81cc20cfa5A29Bb7548d659",
+    "mandateAccount": "0x29E16696BC026369C861e007e9C70Ce03F8DaB8a"
+  },
+  "transactions": {
+    "usdg": "0x465b253c9c94870a125b8dc4b6de6e695522fa8295a0bce6ba429600961f37eb",
+    "tsla": "0x06a4543c0c28b2b6cd5ad1daa67e7e3835e0c60002e5d40b3c3a16750e6ba04b",
+    "amd": "0x7fcad033d18015890096f9d3307eb4b11e47c636634ca0415e6b0d7622b62ab3",
+    "amm": "0xb3bd128bdf2a4234fc366a75d30819cd7824d6c3ee6943f521bdcd40300746ea",
+    "adapter": "0xed824d66e0a5122fb63a5f4d7339c584bc7a14752382e63f636840af6e369d63",
+    "priceFeed": "0xf327169066def86c63055541308feaca054a3da372246b819e4149e81763fd13",
+    "mandateAccount": "0xdb706261ec78219ff9b5e174abf4b955708c848289fec530782374a0642f9d0f"
+  },
+  "gas": {
+    "usdg": { "gasLimit": 2500000, "gasUsed": 541328, "codeSizeBytes": 1926 },
+    "tsla": { "gasLimit": 2500000, "gasUsed": 517949, "codeSizeBytes": 1926 },
+    "amd": { "gasLimit": 2500000, "gasUsed": 517395, "codeSizeBytes": 1926 },
+    "amm": { "gasLimit": 2000000, "gasUsed": 332353, "codeSizeBytes": 1626 },
+    "adapter": { "gasLimit": 2000000, "gasUsed": 294901, "codeSizeBytes": 1372 },
+    "priceFeed": { "gasLimit": 2000000, "gasUsed": 427509, "codeSizeBytes": 1899 },
+    "mandateAccount": { "gasLimit": 10000000, "gasUsed": 2944296, "codeSizeBytes": 16315 }
+  },
+  "seed": {
+    "status": "not-broadcast"
+  }
+}
