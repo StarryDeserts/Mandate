@@ -2,7 +2,6 @@
 pragma solidity 0.8.24;
 
 import {Test} from "forge-std/Test.sol";
-import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 
 import {MandateAccount} from "../../src/MandateAccount.sol";
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
@@ -690,11 +689,31 @@ contract MandateAccountSubmitTest is Test {
             abi.encode(
                 DOMAIN_TYPEHASH,
                 keccak256(bytes(ACTION_DOMAIN_NAME)),
-                keccak256(bytes(Strings.toString(uint256(actionSchemaVersion)))),
+                keccak256(bytes(_toString(uint256(actionSchemaVersion)))),
                 chainId,
                 verifyingContract
             )
         );
+    }
+
+    function _toString(uint256 value) private pure returns (string memory) {
+        if (value == 0) return "0";
+
+        uint256 digits;
+        uint256 remaining = value;
+        while (remaining != 0) {
+            digits++;
+            remaining /= 10;
+        }
+
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits--;
+            buffer[digits] = bytes1(uint8(48 + (value % 10)));
+            value /= 10;
+        }
+
+        return string(buffer);
     }
 
     function _assertDecision(

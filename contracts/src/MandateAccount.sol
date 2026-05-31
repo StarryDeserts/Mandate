@@ -4,7 +4,6 @@ pragma solidity 0.8.24;
 import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
 import {ReentrancyGuard} from "openzeppelin-contracts/contracts/utils/ReentrancyGuard.sol";
-import {Strings} from "openzeppelin-contracts/contracts/utils/Strings.sol";
 import {Math} from "openzeppelin-contracts/contracts/utils/math/Math.sol";
 
 import {IAdapter} from "./interfaces/IAdapter.sol";
@@ -577,11 +576,31 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
             abi.encode(
                 ACTION_DOMAIN_TYPEHASH,
                 keccak256(bytes(ACTION_DOMAIN_NAME)),
-                keccak256(bytes(Strings.toString(uint256(actionSchemaVersion)))),
+                keccak256(bytes(_toString(uint256(actionSchemaVersion)))),
                 block.chainid,
                 address(this)
             )
         );
+    }
+
+    function _toString(uint256 value) private pure returns (string memory) {
+        if (value == 0) return "0";
+
+        uint256 digits;
+        uint256 remaining = value;
+        while (remaining != 0) {
+            digits++;
+            remaining /= 10;
+        }
+
+        bytes memory buffer = new bytes(digits);
+        while (value != 0) {
+            digits--;
+            buffer[digits] = bytes1(uint8(48 + (value % 10)));
+            value /= 10;
+        }
+
+        return string(buffer);
     }
 
     function _removeAllowedAsset(address asset) internal {
