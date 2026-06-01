@@ -10,7 +10,7 @@ export default function Footer() {
       <p>{copy.footer.disclaimer}</p>
       <p className="mono">commit · {commit} · chain {evidence.network.chainId}</p>
       <nav className="footer__links mono" aria-label="Footer links">
-        <a href="https://github.com" rel="noreferrer">GitHub</a>
+        <span>GitHub</span>
         <a href={explorerHomeUrl()}>Explorer</a>
       </nav>
     </footer>

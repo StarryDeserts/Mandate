@@ -2,15 +2,18 @@
 
 import { useEffect, useState } from "react";
 
-export function useReducedMotion(): boolean {
-  const [reduced, setReduced] = useState(false);
+export function useReducedMotion(): boolean | null {
+  const [reduced, setReduced] = useState<boolean | null>(null);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const update = () => setReduced(media.matches);
-    update();
+    const timer = window.setTimeout(update, 0);
     media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
+    return () => {
+      window.clearTimeout(timer);
+      media.removeEventListener("change", update);
+    };
   }, []);
 
   return reduced;

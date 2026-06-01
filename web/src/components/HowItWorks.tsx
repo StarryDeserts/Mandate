@@ -15,6 +15,8 @@ const rungs = [
 
 export default function HowItWorks() {
   useEffect(() => {
+    if (!("IntersectionObserver" in window)) return;
+    document.documentElement.classList.add("reveal-ready");
     const nodes = Array.from(document.querySelectorAll<HTMLElement>("[data-reveal]"));
     const observer = new IntersectionObserver(
       (entries) => {

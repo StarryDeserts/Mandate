@@ -8,13 +8,15 @@ import StaticFrame from "./StaticFrame";
 
 const BoundaryFieldClient = dynamic(() => import("./BoundaryFieldClient"), {
   ssr: false,
-  loading: () => <StaticFrame />
+  loading: () => <StaticFrame interactive={false} />
 });
 
-export default function BoundaryField({ variant }: { variant: BoundaryVariant }) {
+export default function BoundaryField({ variant, decorative = true }: { variant: BoundaryVariant; decorative?: boolean }) {
   const ok = useFeatureDetect();
   const reduced = useReducedMotion();
 
-  if (!ok || reduced) return <StaticFrame compact={variant === "echo"} />;
-  return <BoundaryFieldClient variant={variant} />;
+  if (ok !== true || reduced !== false) {
+    return <StaticFrame compact={variant === "echo"} interactive={!decorative} />;
+  }
+  return <BoundaryFieldClient variant={variant} decorative={decorative} />;
 }

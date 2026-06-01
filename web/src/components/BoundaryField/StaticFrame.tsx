@@ -1,6 +1,6 @@
 import BlockedStamp from "./BlockedStamp";
 
-export default function StaticFrame({ compact = false }: { compact?: boolean }) {
+export default function StaticFrame({ compact = false, interactive = true }: { compact?: boolean; interactive?: boolean }) {
   return (
     <div className={`boundary-static ${compact ? "boundary-static--compact" : ""}`} aria-label="Mandate Boundary Field static blocked frame">
       <svg className="boundary-static__svg" viewBox="0 0 1200 680" role="img" aria-hidden="true">
@@ -52,7 +52,7 @@ export default function StaticFrame({ compact = false }: { compact?: boolean }) 
         </g>
       </svg>
       <div className="boundary-static__stamp">
-        <BlockedStamp compact={compact} />
+        <BlockedStamp compact={compact} interactive={interactive} />
       </div>
     </div>
   );

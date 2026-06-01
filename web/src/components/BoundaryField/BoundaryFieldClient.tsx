@@ -2,31 +2,42 @@
 
 import { useEffect, useRef, useState } from "react";
 import BlockedStamp from "./BlockedStamp";
+import StaticFrame from "./StaticFrame";
 import { BoundaryFieldRenderer } from "./renderer";
 import type { BoundaryPhase, BoundaryVariant } from "./phase-director";
 
 const mobileQuery = "(max-width: 640px)";
 
-export default function BoundaryFieldClient({ variant }: { variant: BoundaryVariant }) {
+export default function BoundaryFieldClient({ variant, decorative = true }: { variant: BoundaryVariant; decorative?: boolean }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<BoundaryFieldRenderer | null>(null);
   const [phase, setPhase] = useState<BoundaryPhase>(0);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = canvas?.parentElement;
     if (!canvas || !container) return;
 
+    setFailed(false);
     const mobile = window.matchMedia(mobileQuery).matches;
     const renderer = new BoundaryFieldRenderer();
     rendererRef.current = renderer;
-    renderer.init(canvas, {
-      variant,
-      particleGrid: mobile ? 64 : 180,
-      bloom: !mobile,
-      dpr: Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2),
-      onPhaseChange: setPhase
-    });
+
+    try {
+      renderer.init(canvas, {
+        variant,
+        particleGrid: mobile ? 64 : 180,
+        bloom: !mobile,
+        dpr: Math.min(window.devicePixelRatio || 1, mobile ? 1.5 : 2),
+        onPhaseChange: setPhase
+      });
+    } catch {
+      renderer.dispose(canvas);
+      rendererRef.current = null;
+      window.setTimeout(() => setFailed(true), 0);
+      return;
+    }
 
     let raf = 0;
     let last = performance.now();
@@ -35,22 +46,32 @@ export default function BoundaryFieldClient({ variant }: { variant: BoundaryVari
     let perfSamples = 0;
     let perfTotal = 0;
 
-    const resize = () => {
-      const rect = container.getBoundingClientRect();
-      renderer.resize(rect.width, rect.height);
+    const stop = () => {
+      if (raf !== 0) cancelAnimationFrame(raf);
+      raf = 0;
+    };
+
+    const start = () => {
+      if (raf !== 0 || !visible || !documentVisible) return;
+      last = performance.now();
+      raf = requestAnimationFrame(tick);
     };
 
     const tick = (now: number) => {
+      raf = 0;
       const dt = now - last;
       last = now;
-      if (visible && documentVisible) {
-        renderer.frame(now, dt);
-        if (!mobile && perfSamples < 30) {
-          perfSamples += 1;
-          perfTotal += dt;
-        }
+      renderer.frame(now, dt);
+      if (!mobile && perfSamples < 30) {
+        perfSamples += 1;
+        perfTotal += dt;
       }
-      raf = requestAnimationFrame(tick);
+      start();
+    };
+
+    const resize = () => {
+      const rect = container.getBoundingClientRect();
+      renderer.resize(rect.width, rect.height);
     };
 
     const resizeObserver = new ResizeObserver(resize);
@@ -59,12 +80,15 @@ export default function BoundaryFieldClient({ variant }: { variant: BoundaryVari
 
     const intersectionObserver = new IntersectionObserver(([entry]) => {
       visible = Boolean(entry?.isIntersecting);
+      if (visible) start();
+      else stop();
     });
     intersectionObserver.observe(container);
 
     const onVisibility = () => {
       documentVisible = !document.hidden;
-      last = performance.now();
+      if (documentVisible) start();
+      else stop();
     };
 
     const onPointerMove = (event: PointerEvent) => {
@@ -91,7 +115,7 @@ export default function BoundaryFieldClient({ variant }: { variant: BoundaryVari
     window.addEventListener("mandate-boundary-freeze", onFreeze as EventListener);
     window.addEventListener("scroll", onScrollBias, { passive: true });
     onScrollBias();
-    raf = requestAnimationFrame(tick);
+    start();
 
     const perfTimer = window.setTimeout(() => {
       if (!mobile && perfSamples > 0 && perfTotal / perfSamples > 22) {
@@ -100,7 +124,7 @@ export default function BoundaryFieldClient({ variant }: { variant: BoundaryVari
     }, 900);
 
     return () => {
-      cancelAnimationFrame(raf);
+      stop();
       window.clearTimeout(perfTimer);
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
@@ -114,13 +138,15 @@ export default function BoundaryFieldClient({ variant }: { variant: BoundaryVari
     };
   }, [variant]);
 
+  if (failed) return <StaticFrame compact={variant === "echo"} interactive={!decorative} />;
+
   const showStamp = phase === 2 || phase === 3;
 
   return (
     <div className={`boundary-field boundary-field--${variant}`}>
       <canvas ref={canvasRef} className="boundary-field__canvas" aria-hidden="true" />
       <div className={`boundary-field__stamp ${showStamp ? "is-visible" : ""}`}>
-        <BlockedStamp compact={variant === "echo"} />
+        <BlockedStamp compact={variant === "echo"} interactive={!decorative} />
       </div>
     </div>
   );
