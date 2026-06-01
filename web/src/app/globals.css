@@ -95,6 +95,135 @@ main {
   transform: translateY(0);
 }
 
+.boundary-field,
+.boundary-static {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.boundary-field__canvas,
+.boundary-static__svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.boundary-field--low-perf .boundary-field__canvas {
+  filter: blur(1px) saturate(1.08);
+}
+
+.boundary-field__stamp,
+.boundary-static__stamp {
+  position: absolute;
+  right: clamp(1rem, 6vw, 5rem);
+  top: 50%;
+  z-index: 2;
+  width: min(360px, calc(100% - 2rem));
+  transform: translateY(-50%);
+}
+
+.boundary-field__stamp {
+  opacity: 0;
+  transform: translateY(-42%) scale(0.96);
+  transition: opacity 700ms var(--ease), transform 700ms var(--ease);
+  pointer-events: none;
+}
+
+.boundary-field__stamp.is-visible {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+  pointer-events: auto;
+}
+
+.blocked-stamp {
+  display: grid;
+  gap: 0.55rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid rgba(255, 84, 54, 0.42);
+  background: linear-gradient(140deg, rgba(30, 12, 9, 0.9), rgba(7, 8, 11, 0.88));
+  box-shadow: 0 0 50px rgba(255, 84, 54, 0.12), inset 0 0 0 1px rgba(255, 255, 255, 0.025);
+  backdrop-filter: blur(14px);
+}
+
+.blocked-stamp__label {
+  color: var(--blocked);
+  font-family: var(--display);
+  font-size: clamp(2.2rem, 7vw, 4.7rem);
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  line-height: 0.82;
+}
+
+.blocked-stamp__reason,
+.blocked-stamp__hash,
+.blocked-stamp__math {
+  font-family: var(--chrome);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.blocked-stamp__reason {
+  color: rgba(255, 84, 54, 0.9);
+  overflow-wrap: anywhere;
+}
+
+.blocked-stamp__math {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  color: var(--fg);
+}
+
+.blocked-stamp__math s {
+  color: var(--blocked);
+  text-decoration-thickness: 2px;
+}
+
+.blocked-stamp__hash {
+  width: max-content;
+  color: var(--safe);
+  border-bottom: 1px solid rgba(109, 240, 214, 0.45);
+}
+
+.blocked-stamp--compact {
+  padding: 0.8rem;
+}
+
+.blocked-stamp--compact .blocked-stamp__label {
+  font-size: clamp(1.8rem, 5vw, 3.2rem);
+}
+
+@media (max-width: 720px) {
+  .boundary-field,
+  .boundary-static {
+    min-height: 420px;
+  }
+
+  .boundary-field__stamp,
+  .boundary-static__stamp {
+    right: 1rem;
+    left: 1rem;
+    top: auto;
+    bottom: 1rem;
+    width: auto;
+    transform: none;
+  }
+
+  .boundary-field__stamp {
+    transform: translateY(12px) scale(0.98);
+  }
+
+  .boundary-field__stamp.is-visible {
+    transform: translateY(0) scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
