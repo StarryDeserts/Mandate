@@ -2,38 +2,87 @@
   "chainId": 46630,
   "network": "robinhood-testnet",
   "deploymentMethod": "split-forge-create",
-  "status": "deployed-unseeded",
+  "status": "deployed-seeded-zero-balances",
   "deployer": "0x4727165918986b69ff3F94aC1dAa94987B819cfD",
   "owner": "0x4727165918986b69ff3F94aC1dAa94987B819cfD",
   "priceSigner": "0xCEc09D1Aa4f881b79d559AF54fDBF0BD1530E070",
+  "priceMaxStaleness": 3600,
+  "sessionKey": "0x3836B6E85F45bC20093bD81d8665659D3fe63B22",
   "contracts": {
-    "usdg": "0x2FF2BF302F81F06a998195c35aEdAA48244289Dd",
-    "tsla": "0xfFE0BdcEf7c05f1E4d7c089FE7c74E937B404d00",
-    "amd": "0x954b04758d4133a700F85fAF430663B1F7bd92f1",
-    "amm": "0xb7505D0fa3001044A650005b6206A14dB3FE7Bb4",
-    "adapter": "0x702C8f073F3a4aC7b140e3434d202107068dB772",
-    "priceFeed": "0x33fC3181cf0eefa6C81cc20cfa5A29Bb7548d659",
-    "mandateAccount": "0x29E16696BC026369C861e007e9C70Ce03F8DaB8a"
+    "usdg": "0xa30948059DC024c14e97Ca95f7C1141f9b0E79F9",
+    "tsla": "0x640a8E64b877B9675606869d3E9ED5E628817AE2",
+    "amd": "0x1a12f142A87d757642E82517eaF3EB10449d0001",
+    "amm": "0xE4F7b15e3a69Bb0bfe6781B5D415Ed08d36e2aF3",
+    "adapter": "0x83C1ec0D973632032c241C4cEA3c7Bc8Bc427b8e",
+    "priceFeed": "0x9737301e300CA96223396D94aA176193Fc5a1D87",
+    "mandateAccount": "0x02A5d620dd3fF1cDaDe96d458e7A51988194E223"
   },
   "transactions": {
-    "usdg": "0x465b253c9c94870a125b8dc4b6de6e695522fa8295a0bce6ba429600961f37eb",
-    "tsla": "0x06a4543c0c28b2b6cd5ad1daa67e7e3835e0c60002e5d40b3c3a16750e6ba04b",
-    "amd": "0x7fcad033d18015890096f9d3307eb4b11e47c636634ca0415e6b0d7622b62ab3",
-    "amm": "0xb3bd128bdf2a4234fc366a75d30819cd7824d6c3ee6943f521bdcd40300746ea",
-    "adapter": "0xed824d66e0a5122fb63a5f4d7339c584bc7a14752382e63f636840af6e369d63",
-    "priceFeed": "0xf327169066def86c63055541308feaca054a3da372246b819e4149e81763fd13",
-    "mandateAccount": "0xdb706261ec78219ff9b5e174abf4b955708c848289fec530782374a0642f9d0f"
+    "usdg": "0xf12a63e893e12379012e7d541cdb074bb4a399bbd618e2a2e624bc025d2464c6",
+    "tsla": "0x3e5445c73fbda72dd9c85abc5aed9d5f315c30e25a3539a389511d3830d6da4e",
+    "amd": "0x2fb4cc3a15fc58736840df84aaf2a21a0c32ea407968fa25ba56b3d53e7e1ee6",
+    "amm": "0x6b648f34f28c782f3ae9e6ca8ec07cfd3b6fa70e3b680b66850128b0c6b1c236",
+    "adapter": "0x5cdc8247fb530b374df3fa02899162f0503d61c199f02154618c4cd2e5e6711f",
+    "priceFeed": "0x3bed50f1a3ee7c06e85709011b8f55d5455bb82e09fc646a9bae5b67c91e66d3",
+    "mandateAccount": "0x6101b5d83b598ce04456a496320ebdcfda52df8af7d006327f591c30be943791"
   },
   "gas": {
-    "usdg": { "gasLimit": 2500000, "gasUsed": 541328, "codeSizeBytes": 1926 },
-    "tsla": { "gasLimit": 2500000, "gasUsed": 517949, "codeSizeBytes": 1926 },
-    "amd": { "gasLimit": 2500000, "gasUsed": 517395, "codeSizeBytes": 1926 },
-    "amm": { "gasLimit": 2000000, "gasUsed": 332353, "codeSizeBytes": 1626 },
-    "adapter": { "gasLimit": 2000000, "gasUsed": 294901, "codeSizeBytes": 1372 },
-    "priceFeed": { "gasLimit": 2000000, "gasUsed": 427509, "codeSizeBytes": 1899 },
-    "mandateAccount": { "gasLimit": 10000000, "gasUsed": 2944296, "codeSizeBytes": 16315 }
+    "usdg": { "gasLimit": 2500000, "gasUsed": 955615, "codeSizeBytes": 1926 },
+    "tsla": { "gasLimit": 2500000, "gasUsed": 953411, "codeSizeBytes": 1926 },
+    "amd": { "gasLimit": 2500000, "gasUsed": 954072, "codeSizeBytes": 1926 },
+    "amm": { "gasLimit": 2000000, "gasUsed": 677297, "codeSizeBytes": 1626 },
+    "adapter": { "gasLimit": 2000000, "gasUsed": 593128, "codeSizeBytes": 1372 },
+    "priceFeed": { "gasLimit": 2000000, "gasUsed": 817842, "codeSizeBytes": 1899 },
+    "mandateAccount": { "gasLimit": 10000000, "gasUsed": 6769677, "codeSizeBytes": 16745 }
   },
   "seed": {
-    "status": "not-broadcast"
+    "status": "seeded-zero-balances",
+    "method": "manual-cast-send-explicit-gas",
+    "accountBalanceSeedEnabled": false,
+    "sessionKeyValidUntil": 1782989000,
+    "mandate": {
+      "mandateVersion": 1,
+      "maxSingleAssetExposureBps": 3500,
+      "maxTradeSizeUSDG": "200000000000000000000",
+      "maxDailyTurnoverBps": 2000,
+      "cooldownSeconds": 0
+    },
+    "amm": {
+      "usdgToTslaRate": "500000000000000000",
+      "tslaLiquidity": "10000000000000000000000"
+    },
+    "transactions": {
+      "setRate": "0x23d9aab784bf939644018a4c5a197c738c2ae6d5b8e21dc766919c08933ecf04",
+      "setMandate": "0x29fda8fc1bcc77ed8311fac78c9da4e98b58045ae2032c02f3bd944c48e11ed8",
+      "setAdapterAllowed": "0xa91b477ac8d736e8f241d8496025036b7e426fe2af35c31102bdcc03c4ac2e1c",
+      "registerPriceOracle": "0x1fb7a5217f17a4dba85c4de59bdaf0a565fa88c68236f6c5d863df5a35ce978c",
+      "setAssetAllowedUSDG": "0x4d8d0aaa2be42c21af911182b0b9e6a5d9713e40a7eac61aa0606465f898f8e1",
+      "setAssetAllowedTSLA": "0x4cd24bd62e4fbd373f497ad27f19eaed08901baacf26f938aefe99b5385bfff6",
+      "setAssetAllowedAMD": "0x1d62ef398e7102af5201f32ad572096c1a39271fb29978582e6b28e8d58770a4",
+      "addSessionKey": "0x3b60237e83755fc3d89a943d0659130b9bdb03e083fdee4a6aa7b268c1085a6b",
+      "refreshSessionKey": "0x13255bb18d1a4d5d79676ce6bb3d9081a3071ea306b09766ef60b7a2c1683b05",
+      "mintAmmTslaLiquidity": "0x5bfe597f37dd3012a07f26e8ffa036f1de23fc7e620f0ea00dd9b101054935f5"
+    },
+    "gas": {
+      "setRate": { "gasLimit": 150000, "gasUsed": 115377 },
+      "setMandate": { "gasLimit": 250000, "gasUsed": 172495 },
+      "setAdapterAllowed": { "gasLimit": 150000, "gasUsed": 107984 },
+      "registerPriceOracle": { "gasLimit": 150000, "gasUsed": 99994 },
+      "setAssetAllowedUSDG": { "gasLimit": 250000, "gasUsed": 152574 },
+      "setAssetAllowedTSLA": { "gasLimit": 250000, "gasUsed": 135474 },
+      "setAssetAllowedAMD": { "gasLimit": 250000, "gasUsed": 135462 },
+      "addSessionKey": { "gasLimit": 150000, "gasUsed": 138603 },
+      "refreshSessionKey": { "gasLimit": 200000, "gasUsed": 108670 },
+      "mintAmmTslaLiquidity": { "gasLimit": 200000, "gasUsed": 128468 }
+    },
+    "verification": {
+      "allowedAssets": true,
+      "adapterAllowed": true,
+      "oracleRegistered": true,
+      "sessionKeyRole": "SESSION",
+      "mandateAccountBalancesZero": true,
+      "mockERC20MintSmoke": "simulated-pass",
+      "depositAfterApproveSmoke": "simulated-pass"
+    }
   }
 }

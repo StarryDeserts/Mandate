@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { URL } from 'node:url';
 
 import { getAddress, isAddress, type Address } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 import {
   DEFAULT_CHAIN_ID,
@@ -14,8 +16,18 @@ import {
 } from './sign-price.js';
 
 const DEFAULT_PRICE_USDG_1E18 = 1_000_000_000_000_000_000n;
+const DEFAULT_TSLA_PRICE_USDG_1E18 = 2_000_000_000_000_000_000n;
+const DEFAULT_AMD_PRICE_USDG_1E18 = 1_000_000_000_000_000_000n;
 const DEFAULT_PORT = 8_787;
 const DEFAULT_HOST = '127.0.0.1';
+
+type DeploymentDefaults = {
+  chainId: number;
+  oracleAddress: Address;
+  priceSigner: Address;
+  priceMap: Map<string, bigint>;
+  usdgAddress: Address;
+};
 
 type ServerConfig = {
   privateKey: string;
@@ -30,12 +42,13 @@ type ServerConfig = {
 };
 
 export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
-  const oracleAddress = env.ORACLE_ADDRESS;
+  const deployment = loadDeploymentDefaults(env.MANDATE_DEPLOYMENT_PATH);
+  const oracleAddress = env.ORACLE_ADDRESS ?? deployment?.oracleAddress;
   if (oracleAddress === undefined || !isAddress(oracleAddress, { strict: false })) {
     throw new Error('ORACLE_ADDRESS must be set to the SignedDemoPriceFeed address');
   }
 
-  const usdgAddress = env.USDG_ADDRESS;
+  const usdgAddress = env.USDG_ADDRESS ?? deployment?.usdgAddress;
   if (usdgAddress === undefined || usdgAddress.trim() === '') {
     throw new Error('USDG_ADDRESS must be set to the USDG token address');
   }
@@ -45,15 +58,16 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
 
   const privateKey = normalizePrivateKey(env.PRICE_SIGNER_KEY, 'PRICE_SIGNER_KEY');
   assertIndependentSignerKey(privateKey, env);
+  if (deployment) assertSignerMatchesDeployment(privateKey, deployment.priceSigner);
 
   return {
     privateKey,
     oracleAddress: getAddress(oracleAddress),
-    chainId: parsePositiveInteger(env.CHAIN_ID ?? String(DEFAULT_CHAIN_ID), 'CHAIN_ID'),
+    chainId: parsePositiveInteger(env.CHAIN_ID ?? String(deployment?.chainId ?? DEFAULT_CHAIN_ID), 'CHAIN_ID'),
     validitySeconds: parsePositiveInteger(env.PRICE_TTL_SECONDS ?? String(DEFAULT_VALIDITY_SECONDS), 'PRICE_TTL_SECONDS'),
     port: parsePositiveInteger(env.PORT ?? String(DEFAULT_PORT), 'PORT'),
     host: parseHost(env.SIGNER_HOST ?? DEFAULT_HOST, 'SIGNER_HOST'),
-    priceMap: loadPriceMap(env),
+    priceMap: loadPriceMap(env, deployment),
     defaultPriceUSDG1e18: parseUnsignedBigInt(
       env.DEFAULT_PRICE_USDG_1E18 ?? DEFAULT_PRICE_USDG_1E18.toString(),
       'DEFAULT_PRICE_USDG_1E18',
@@ -65,9 +79,18 @@ export function loadServerConfig(env: NodeJS.ProcessEnv = process.env): ServerCo
 export function createPriceServer(config: ServerConfig) {
   return createServer(async (request, response) => {
     try {
+      if (request.method === 'OPTIONS') {
+        writeJson(response, 204, null);
+        return;
+      }
+
       const url = requestUrl(request);
       if (url.pathname !== '/price') {
         writeJson(response, 404, { error: 'not_found' });
+        return;
+      }
+      if (request.method !== 'GET') {
+        writeJson(response, 405, { error: 'method_not_allowed' });
         return;
       }
 
@@ -129,8 +152,48 @@ function resolvePrices(assets: Address[], config: ServerConfig): PriceInput[] {
   }));
 }
 
-function loadPriceMap(env: NodeJS.ProcessEnv): Map<string, bigint> {
-  const priceMap = new Map<string, bigint>();
+function loadDeploymentDefaults(path: string | undefined): DeploymentDefaults | null {
+  if (path === undefined || path.trim() === '') return null;
+
+  const deployment = JSON.parse(readFileSync(path, 'utf8')) as {
+    chainId?: unknown;
+    priceSigner?: unknown;
+    contracts?: { usdg?: unknown; tsla?: unknown; amd?: unknown; priceFeed?: unknown };
+  };
+  const contracts = deployment.contracts ?? {};
+  const usdgAddress = parseAddressValue(contracts.usdg, 'contracts.usdg');
+  const tslaAddress = parseAddressValue(contracts.tsla, 'contracts.tsla');
+  const amdAddress = parseAddressValue(contracts.amd, 'contracts.amd');
+  const priceMap = new Map<string, bigint>([
+    [tslaAddress.toLowerCase(), DEFAULT_TSLA_PRICE_USDG_1E18],
+    [amdAddress.toLowerCase(), DEFAULT_AMD_PRICE_USDG_1E18],
+  ]);
+
+  return {
+    chainId: parsePositiveInteger(String(deployment.chainId ?? DEFAULT_CHAIN_ID), 'deployment.chainId'),
+    oracleAddress: parseAddressValue(contracts.priceFeed, 'contracts.priceFeed'),
+    priceSigner: parseAddressValue(deployment.priceSigner, 'priceSigner'),
+    priceMap,
+    usdgAddress,
+  };
+}
+
+function assertSignerMatchesDeployment(privateKey: string, expectedSigner: Address): void {
+  const signerAddress = privateKeyToAccount(privateKey as `0x${string}`).address;
+  if (signerAddress.toLowerCase() !== expectedSigner.toLowerCase()) {
+    throw new Error('PRICE_SIGNER_KEY must match deployment priceSigner');
+  }
+}
+
+function parseAddressValue(value: unknown, label: string): Address {
+  if (typeof value !== 'string' || !isAddress(value, { strict: false })) {
+    throw new Error(`MANDATE_DEPLOYMENT_PATH ${label} must be a valid EVM address`);
+  }
+  return getAddress(value);
+}
+
+function loadPriceMap(env: NodeJS.ProcessEnv, deployment: DeploymentDefaults | null = null): Map<string, bigint> {
+  const priceMap = new Map<string, bigint>(deployment?.priceMap ?? []);
 
   if (env.PRICE_MAP_JSON !== undefined && env.PRICE_MAP_JSON.trim() !== '') {
     const parsed = JSON.parse(env.PRICE_MAP_JSON) as Record<string, unknown>;
@@ -173,8 +236,13 @@ function parseUnsignedBigInt(value: string, label: string): bigint {
 }
 
 function writeJson(response: ServerResponse, statusCode: number, body: unknown): void {
-  response.writeHead(statusCode, { 'content-type': 'application/json; charset=utf-8' });
-  response.end(`${JSON.stringify(body)}\n`);
+  response.writeHead(statusCode, {
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET, OPTIONS',
+    'access-control-allow-headers': 'content-type',
+    'content-type': 'application/json; charset=utf-8',
+  });
+  response.end(body === null ? '' : `${JSON.stringify(body)}\n`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

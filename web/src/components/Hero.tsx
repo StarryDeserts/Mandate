@@ -48,7 +48,7 @@ export default function Hero() {
           </div>
         </div>
         <div className="hero__ctas">
-          <a className="button button--primary" href="/app">
+          <a className="button button--primary" href="/live">
             {copy.hero.primaryCta}
           </a>
           <a className="button button--secondary" href={txUrl(blockedTx)}>

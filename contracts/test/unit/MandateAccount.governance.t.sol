@@ -6,7 +6,7 @@ import {Test} from "forge-std/Test.sol";
 import {MandateAccount} from "../../src/MandateAccount.sol";
 import {IPriceOracle} from "../../src/interfaces/IPriceOracle.sol";
 import {MockERC20} from "../../src/mocks/MockERC20.sol";
-import {NotAuthorized} from "../../src/types/Errors.sol";
+import {AssetNotAllowedNow, NotAuthorized} from "../../src/types/Errors.sol";
 import {Role} from "../../src/types/Enums.sol";
 import {MandateConfig, PriceData, SessionKey} from "../../src/types/Types.sol";
 
@@ -46,6 +46,7 @@ contract MandateAccountGovernanceTest is Test {
     event AssetAllowedSet(address indexed asset, bool allowed);
     event AdapterAllowedSet(address indexed adapter, bool allowed);
     event PriceOracleRegistered(address indexed oracle, address indexed signer);
+    event Deposited(address indexed asset, uint256 amount, address indexed from);
     event Withdrawn(address indexed asset, uint256 amount, address indexed to);
 
     address private constant OWNER = address(0xA11CE);
@@ -108,6 +109,66 @@ contract MandateAccountGovernanceTest is Test {
         assertTrue(transferred);
         assertEq(token.balanceOf(address(account)), DEPOSIT_AMOUNT);
         assertEq(token.balanceOf(OWNER), 0);
+    }
+
+    function test_depositAllowedAssetTransfersFromCallerAndEmitsEvent() public {
+        _setAssetAllowedAsOwner(address(token), true);
+        token.mint(STRANGER, DEPOSIT_AMOUNT);
+
+        vm.prank(STRANGER);
+        token.approve(address(account), DEPOSIT_AMOUNT);
+
+        vm.expectEmit(true, true, false, true, address(account));
+        emit Deposited(address(token), DEPOSIT_AMOUNT, STRANGER);
+
+        vm.prank(STRANGER);
+        account.deposit(address(token), DEPOSIT_AMOUNT);
+
+        assertEq(token.balanceOf(address(account)), DEPOSIT_AMOUNT);
+        assertEq(token.balanceOf(STRANGER), 0);
+        assertEq(token.allowance(STRANGER, address(account)), 0);
+    }
+
+    function test_depositAllowedAssetWorksForNonOwner() public {
+        _setAssetAllowedAsOwner(address(token), true);
+        token.mint(RECIPIENT, WITHDRAW_AMOUNT);
+
+        vm.prank(RECIPIENT);
+        token.approve(address(account), WITHDRAW_AMOUNT);
+
+        vm.prank(RECIPIENT);
+        account.deposit(address(token), WITHDRAW_AMOUNT);
+
+        assertEq(token.balanceOf(address(account)), WITHDRAW_AMOUNT);
+        assertEq(token.balanceOf(RECIPIENT), 0);
+        assertEq(token.allowance(RECIPIENT, address(account)), 0);
+    }
+
+    function test_depositRevertsForDisallowedAsset() public {
+        token.mint(STRANGER, DEPOSIT_AMOUNT);
+
+        vm.prank(STRANGER);
+        token.approve(address(account), DEPOSIT_AMOUNT);
+
+        vm.expectRevert(abi.encodeWithSelector(AssetNotAllowedNow.selector, address(token)));
+        vm.prank(STRANGER);
+        account.deposit(address(token), DEPOSIT_AMOUNT);
+
+        assertEq(token.balanceOf(address(account)), 0);
+        assertEq(token.balanceOf(STRANGER), DEPOSIT_AMOUNT);
+        assertEq(token.allowance(STRANGER, address(account)), DEPOSIT_AMOUNT);
+    }
+
+    function test_depositWithoutAllowanceRevertsAndLeavesBalancesUnchanged() public {
+        _setAssetAllowedAsOwner(address(token), true);
+        token.mint(STRANGER, DEPOSIT_AMOUNT);
+
+        vm.expectRevert();
+        vm.prank(STRANGER);
+        account.deposit(address(token), DEPOSIT_AMOUNT);
+
+        assertEq(token.balanceOf(address(account)), 0);
+        assertEq(token.balanceOf(STRANGER), DEPOSIT_AMOUNT);
     }
 
     function test_ownerWithdrawTransfersTokensAndEmitsEvent() public {

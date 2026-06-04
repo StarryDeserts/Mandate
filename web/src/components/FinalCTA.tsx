@@ -14,7 +14,7 @@ export default function FinalCTA() {
           {copy.final.line}
         </h2>
         <div className="hero__ctas final-cta__buttons">
-          <a className="button button--primary" href="/app">Launch Demo</a>
+          <a className="button button--primary" href="/live">Launch Demo</a>
           <a className="button button--secondary" href={explorerHomeUrl()}>View Contracts</a>
         </div>
       </div>

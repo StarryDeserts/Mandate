@@ -94,19 +94,30 @@ contract SeedDemoScript is Script {
         _assertAdapterWiresAmm(demo.adapter, demo.amm);
         _logAddresses(demo);
 
-        vm.startBroadcast();
-        _seedBalances(demo);
+        bool seedAccountBalances = _shouldSeedAccountBalances();
+        bool verifyDemoOutcomes = _shouldVerifyDemoOutcomes(seedAccountBalances);
+
+        vm.startBroadcast(broadcaster);
         _configureAmm(demo, broadcaster);
         _configureMandate(demo);
+        _seedBalances(demo, broadcaster, seedAccountBalances);
         vm.stopBroadcast();
 
-        safeAmount = _verifyDemoOutcomes(demo);
+        if (verifyDemoOutcomes) safeAmount = _verifyDemoOutcomes(demo);
     }
 
     function _verifyDemoOutcomes(DemoContracts memory demo) private view returns (uint256 safeAmount) {
         PriceData[] memory prices = _freshPrices(demo);
         uint16 preExposureBps = _verifyDangerousPreview(demo, prices);
         safeAmount = _verifySafePreview(demo, prices, preExposureBps);
+    }
+
+    function _shouldSeedAccountBalances() private view returns (bool) {
+        return vm.envOr("SEED_ACCOUNT_BALANCES", false);
+    }
+
+    function _shouldVerifyDemoOutcomes(bool seedAccountBalances) private view returns (bool) {
+        return vm.envOr("VERIFY_DEMO_OUTCOMES", seedAccountBalances);
     }
 
     function _verifyDangerousPreview(DemoContracts memory demo, PriceData[] memory prices)
@@ -192,7 +203,7 @@ contract SeedDemoScript is Script {
 
         address priceSigner = vm.addr(priceSignerPk);
 
-        vm.startBroadcast();
+        vm.startBroadcast(broadcaster);
         demo.usdg = new MockERC20("Mandate Demo USDG", "USDG");
         demo.tsla = new MockERC20("Mandate Demo TSLA", "TSLA");
         demo.amd = new MockERC20("Mandate Demo AMD", "AMD");
@@ -258,22 +269,30 @@ contract SeedDemoScript is Script {
         if (actualAmm != expectedAmm) revert AdapterAmmMismatch(expectedAmm, actualAmm);
     }
 
-    function _seedBalances(DemoContracts memory demo) private {
-        _seedAccountBalance(demo.usdg, demo.account, USDG_BALANCE);
-        _seedAccountBalance(demo.tsla, demo.account, TSLA_BALANCE);
-        _seedAccountBalance(demo.amd, demo.account, AMD_BALANCE);
+    function _seedBalances(DemoContracts memory demo, address depositor, bool seedAccountBalances) private {
+        if (seedAccountBalances) {
+            _seedAccountBalance(demo.usdg, demo.account, depositor, USDG_BALANCE);
+            _seedAccountBalance(demo.tsla, demo.account, depositor, TSLA_BALANCE);
+            _seedAccountBalance(demo.amd, demo.account, depositor, AMD_BALANCE);
+        }
         _seedMinimumAmmLiquidity(demo.tsla, demo.amm, AMM_TSLA_LIQUIDITY);
 
+        console2.log("SeedDemo account balance seed enabled", seedAccountBalances);
         console2.log("SeedDemo account USDG balance", demo.usdg.balanceOf(address(demo.account)));
         console2.log("SeedDemo account TSLA balance", demo.tsla.balanceOf(address(demo.account)));
         console2.log("SeedDemo account AMD balance", demo.amd.balanceOf(address(demo.account)));
         console2.log("SeedDemo AMM TSLA liquidity", demo.tsla.balanceOf(address(demo.amm)));
     }
 
-    function _seedAccountBalance(MockERC20 token, MandateAccount account, uint256 target) private {
+    function _seedAccountBalance(MockERC20 token, MandateAccount account, address depositor, uint256 target) private {
         uint256 current = token.balanceOf(address(account));
         if (current > target) revert AccountBalanceAboveTarget(address(token), current, target);
-        if (current < target) token.mint(address(account), target - current);
+        if (current < target) {
+            uint256 depositAmount = target - current;
+            token.mint(depositor, depositAmount);
+            token.approve(address(account), depositAmount);
+            account.deposit(address(token), depositAmount);
+        }
     }
 
     function _seedMinimumAmmLiquidity(MockERC20 token, MockAMM amm, uint256 minimumLiquidity) private {

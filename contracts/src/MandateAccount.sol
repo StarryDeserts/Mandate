@@ -53,6 +53,7 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
     event PriceOracleRegistered(address indexed oracle, address indexed signer);
     event SessionKeyAdded(address indexed key, uint64 validUntil);
     event SessionKeyRevoked(address indexed key);
+    event Deposited(address indexed asset, uint256 amount, address indexed from);
     event Withdrawn(address indexed asset, uint256 amount, address indexed to);
     event ActionSubmitted(bytes32 indexed actionId, address indexed actor, Role role, DecisionStatus status);
     event ActionBlocked(
@@ -129,6 +130,14 @@ contract MandateAccount is IAssetRegistry, IAdapterRegistry, IMandateRegistry, R
         if (sessionKey.enabled && block.timestamp <= sessionKey.validUntil) return Role.SESSION;
 
         return Role.NONE;
+    }
+
+    function deposit(address asset, uint256 amount) external nonReentrant {
+        if (!isAssetAllowed[asset]) revert AssetNotAllowedNow(asset);
+
+        IERC20(asset).safeTransferFrom(msg.sender, address(this), amount);
+
+        emit Deposited(asset, amount, msg.sender);
     }
 
     function withdraw(address asset, uint256 amount, address to) external nonReentrant {
