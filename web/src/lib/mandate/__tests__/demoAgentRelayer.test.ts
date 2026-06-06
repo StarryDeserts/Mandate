@@ -1,12 +1,15 @@
 import { privateKeyToAccount } from "viem/accounts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DecisionStatus, ReasonCode, Role } from "../reasons";
 import { getMandateDeployment } from "../deployment";
-import { parseDemoAgentActionRequest, runDemoAgentAction, type DemoAgentDependencies } from "../demoAgentRelayer";
+import { createDemoAgentDependencies, parseDemoAgentActionRequest, runDemoAgentAction, type DemoAgentDependencies } from "../demoAgentRelayer";
+import type { PriceData } from "../types";
 
 const matchingPrivateKey = "0x0000000000000000000000000000000000000000000000000000000000000001" as const;
 const mismatchPrivateKey = "0x0000000000000000000000000000000000000000000000000000000000000002" as const;
+const priceSignerPrivateKey = "0x0000000000000000000000000000000000000000000000000000000000000abc" as const;
 const matchingSessionKey = privateKeyToAccount(matchingPrivateKey).address;
+const matchingPriceSigner = privateKeyToAccount(priceSignerPrivateKey).address;
 
 function deploymentFixture() {
   return { ...getMandateDeployment(), sessionKey: matchingSessionKey };
@@ -16,22 +19,32 @@ function dependencies({
   previewCode = ReasonCode.OK,
   decisionStatus = DecisionStatus.APPROVED,
   decisionStatuses,
-  sessionKeyRead = { enabled: true, validUntil: 4_102_444_800n, allowedActionTypes: 0, maxAmountInPerAction: 0n, scopeHash: "0x0000000000000000000000000000000000000000000000000000000000000000" }
+  sessionKeyRead = { enabled: true, validUntil: 4_102_444_800n, allowedActionTypes: 0, maxAmountInPerAction: 0n, scopeHash: "0x0000000000000000000000000000000000000000000000000000000000000000" },
+  priceRows,
+  balance = 1_000_000_000_000_000_000n,
+  gasPrice = 1_000_000_000n
 }: {
   previewCode?: number;
   decisionStatus?: number;
   decisionStatuses?: number[];
   sessionKeyRead?: unknown;
+  priceRows?: () => Promise<PriceData[]>;
+  balance?: bigint;
+  gasPrice?: bigint;
 } = {}): DemoAgentDependencies {
   const writes: string[] = [];
   let decisionReadIndex = 0;
   return {
     writes,
-    priceRows: async () => [
-      { asset: deploymentFixture().contracts.tsla, priceUSDG1e18: 2_000_000_000_000_000_000n, timestamp: 1_700_000_000n, validUntil: 1_700_003_600n, signature: "0x1234" as `0x${string}` }
-    ],
+    priceRows:
+      priceRows ??
+      (async () => [
+        { asset: deploymentFixture().contracts.tsla, priceUSDG1e18: 2_000_000_000_000_000_000n, timestamp: 1_700_000_000n, validUntil: 1_700_003_600n, signature: "0x1234" as `0x${string}` }
+      ]),
     publicClient: {
       getChainId: async () => 46630,
+      getBalance: async () => balance,
+      getGasPrice: async () => gasPrice,
       readContract: async ({ functionName }: { functionName: string }) => {
         if (functionName === "ACTION_SCHEMA_VERSION") return 1;
         if (functionName === "nextNonce") return 7n;
@@ -59,6 +72,27 @@ function dependencies({
 }
 
 describe("demo agent relayer", () => {
+  it("loads signed price rows server-side through the shared signer without any HTTP fetch", async () => {
+    const deployment = { ...deploymentFixture(), priceSigner: matchingPriceSigner };
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const deps = createDemoAgentDependencies({
+      deployment,
+      privateKey: matchingPrivateKey,
+      rpcUrl: "http://127.0.0.1:8545",
+      priceSignerKey: priceSignerPrivateKey
+    });
+    const rows = await deps.priceRows();
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(rows.map((row) => row.asset).sort()).toEqual([deployment.contracts.amd, deployment.contracts.tsla].sort());
+    for (const row of rows) {
+      expect(row.signature).toMatch(/^0x[0-9a-f]+$/);
+      expect(row.priceUSDG1e18 > 0n).toBe(true);
+    }
+    fetchSpy.mockRestore();
+  });
+
   it("fails closed when the private key does not match the deployment session key", async () => {
     const deps = dependencies();
 
@@ -156,6 +190,41 @@ describe("demo agent relayer", () => {
       nowSeconds: () => 1_700_000_000
     });
 
+    expect(JSON.stringify(result)).not.toContain(matchingPrivateKey);
+  });
+
+  it("returns price_rows_unavailable and sends no tx when signed rows cannot be loaded", async () => {
+    const deps = dependencies({
+      priceRows: async () => {
+        throw new Error("signer offline");
+      }
+    });
+
+    const result = await runDemoAgentAction({
+      kind: "safe",
+      deployment: deploymentFixture(),
+      privateKey: matchingPrivateKey,
+      dependencies: deps,
+      nowSeconds: () => 1_700_000_000
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "price_rows_unavailable" });
+    expect(deps.writes).toEqual([]);
+  });
+
+  it("returns insufficient_session_gas and sends no tx when the session key cannot pay for gas", async () => {
+    const deps = dependencies({ balance: 0n, gasPrice: 1_000_000_000n });
+
+    const result = await runDemoAgentAction({
+      kind: "safe",
+      deployment: deploymentFixture(),
+      privateKey: matchingPrivateKey,
+      dependencies: deps,
+      nowSeconds: () => 1_700_000_000
+    });
+
+    expect(result).toMatchObject({ ok: false, reason: "insufficient_session_gas" });
+    expect(deps.writes).toEqual([]);
     expect(JSON.stringify(result)).not.toContain(matchingPrivateKey);
   });
 });
